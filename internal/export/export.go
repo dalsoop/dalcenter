@@ -176,7 +176,8 @@ func ApplyTo(plan *Plan, runtimeHomes map[string]string) error {
 		}
 	}
 
-	// Export hooks
+	// Export hooks (file symlinks + settings.json merge)
+	dalName := filepath.Base(plan.RepoRoot)
 	for runtime, hooks := range plan.Hooks {
 		home, ok := runtimeHomes[runtime]
 		if !ok {
@@ -201,6 +202,15 @@ func ApplyTo(plan *Plan, runtimeHomes map[string]string) error {
 
 			if err := replaceSymlink(dst, src); err != nil {
 				return fmt.Errorf("export hook %s: %w", rel, err)
+			}
+		}
+
+		// Merge into settings.json (Claude only for now)
+		if runtime == "claude" {
+			entries := ParseHookEntries(plan.RepoRoot, hooks, dalName)
+			settingsPath := filepath.Join(home, "settings.json")
+			if err := MergeHooksToSettings(settingsPath, entries); err != nil {
+				return fmt.Errorf("merge hooks to settings: %w", err)
 			}
 		}
 	}
@@ -230,7 +240,8 @@ func Remove(plan *Plan) error {
 		}
 	}
 
-	// Remove hooks
+	// Remove hooks (file symlinks + settings.json entries)
+	dalName := filepath.Base(plan.RepoRoot)
 	for runtime, hooks := range plan.Hooks {
 		hr, err := hooksRoot(runtime)
 		if err != nil {
@@ -245,6 +256,19 @@ func Remove(plan *Plan) error {
 			dst := filepath.Join(hr, name)
 			if err := removeSymlink(dst, src); err != nil {
 				return fmt.Errorf("unexport hook %s: %w", rel, err)
+			}
+		}
+
+		// Remove from settings.json (Claude only)
+		if runtime == "claude" {
+			entries := ParseHookEntries(plan.RepoRoot, hooks, dalName)
+			home, err := runtimeHome(runtime)
+			if err != nil {
+				return err
+			}
+			settingsPath := filepath.Join(home, "settings.json")
+			if err := RemoveHooksFromSettings(settingsPath, entries); err != nil {
+				return fmt.Errorf("remove hooks from settings: %w", err)
 			}
 		}
 	}
