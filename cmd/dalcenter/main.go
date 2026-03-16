@@ -776,7 +776,7 @@ func watchCmd() *cobra.Command {
 }
 
 func provisionCmd() *cobra.Command {
-	var vmid string
+	var vmid, storage, bridge, memory, cores string
 	var dryRun bool
 	cmd := &cobra.Command{
 		Use:   "provision <name>",
@@ -810,6 +810,10 @@ func provisionCmd() *cobra.Command {
 				VMID:         vmid,
 				Packages:     plan.ContainerPackages,
 				Agents:       plan.Agents,
+				Storage:      storage,
+				Bridge:       bridge,
+				Memory:       memory,
+				Cores:        cores,
 			}
 
 			r := provision.Provision(inst.InstanceRoot, spec, dryRun)
@@ -827,6 +831,10 @@ func provisionCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&vmid, "vmid", "", "explicit VMID (default: auto)")
+	cmd.Flags().StringVar(&storage, "storage", "", "storage pool (default: local-lvm)")
+	cmd.Flags().StringVar(&bridge, "bridge", "", "network bridge (e.g. vmbr0)")
+	cmd.Flags().StringVar(&memory, "memory", "", "memory in MB (default: 512)")
+	cmd.Flags().StringVar(&cores, "cores", "", "CPU cores (default: 1)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print command without executing")
 	return cmd
 }

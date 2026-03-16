@@ -17,6 +17,10 @@ type Spec struct {
 	VMID         string             // if empty, auto-assigned by pct
 	Packages     []string           // apt packages to install after create
 	Agents       []export.AgentSpec // agents to install after packages
+	Storage      string             // --storage (default: local-lvm)
+	Bridge       string             // --bridge network bridge (default: vmbr0)
+	Memory       string             // --memory in MB (default: 512)
+	Cores        string             // --cores (default: 1)
 }
 
 // Result of a provision attempt.
@@ -40,11 +44,30 @@ func BuildCommand(spec Spec) []string {
 	ostemplate := resolveTemplate(spec.Base)
 	args = append(args, "--ostemplate", ostemplate)
 	args = append(args, "--hostname", sanitizeHostname(spec.InstanceName))
-	args = append(args, "--storage", "local-lvm")
-	args = append(args, "--memory", "512")
-	args = append(args, "--rootfs", "local-lvm:4")
+
+	storage := spec.Storage
+	if storage == "" {
+		storage = "local-lvm"
+	}
+	memory := spec.Memory
+	if memory == "" {
+		memory = "512"
+	}
+	cores := spec.Cores
+	if cores == "" {
+		cores = "1"
+	}
+
+	args = append(args, "--storage", storage)
+	args = append(args, "--memory", memory)
+	args = append(args, "--cores", cores)
+	args = append(args, "--rootfs", storage+":4")
 	args = append(args, "--unprivileged", "1")
 	args = append(args, "--start", "0")
+
+	if spec.Bridge != "" {
+		args = append(args, "--net0", fmt.Sprintf("name=eth0,bridge=%s,ip=dhcp", spec.Bridge))
+	}
 
 	return args
 }

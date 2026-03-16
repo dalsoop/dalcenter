@@ -29,6 +29,51 @@ func TestBuildCommandDefaults(t *testing.T) {
 	}
 }
 
+func TestBuildCommandCustomOptions(t *testing.T) {
+	args := BuildCommand(Spec{
+		Base:         "ubuntu:24.04",
+		InstanceName: "test",
+		VMID:         "300",
+		Storage:      "zfs-pool",
+		Bridge:       "vmbr1",
+		Memory:       "2048",
+		Cores:        "4",
+	})
+	cmd := strings.Join(args, " ")
+	if !strings.Contains(cmd, "--storage zfs-pool") {
+		t.Fatalf("expected zfs-pool storage, got: %s", cmd)
+	}
+	if !strings.Contains(cmd, "--memory 2048") {
+		t.Fatalf("expected 2048 memory, got: %s", cmd)
+	}
+	if !strings.Contains(cmd, "--cores 4") {
+		t.Fatalf("expected 4 cores, got: %s", cmd)
+	}
+	if !strings.Contains(cmd, "bridge=vmbr1") {
+		t.Fatalf("expected vmbr1 bridge, got: %s", cmd)
+	}
+	if !strings.Contains(cmd, "--rootfs zfs-pool:4") {
+		t.Fatalf("expected rootfs with zfs-pool, got: %s", cmd)
+	}
+}
+
+func TestBuildCommandDefaultsNoBridge(t *testing.T) {
+	args := BuildCommand(Spec{
+		Base:         "ubuntu:24.04",
+		InstanceName: "test",
+	})
+	cmd := strings.Join(args, " ")
+	if strings.Contains(cmd, "--net0") {
+		t.Fatalf("expected no --net0 without bridge, got: %s", cmd)
+	}
+	if !strings.Contains(cmd, "--storage local-lvm") {
+		t.Fatalf("expected default storage, got: %s", cmd)
+	}
+	if !strings.Contains(cmd, "--cores 1") {
+		t.Fatalf("expected default cores, got: %s", cmd)
+	}
+}
+
 func TestBuildCommandWithVMID(t *testing.T) {
 	args := BuildCommand(Spec{
 		Base:         "debian:12",
