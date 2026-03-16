@@ -70,7 +70,7 @@ func main() {
 		Short: "DalForge local dal center CLI",
 	}
 
-	root.AddCommand(joinCmd(), listCmd(), statusCmd(), secretCmd(), validateCmd(), exportCmd(), unexportCmd(), startCmd(), stopCmd(), restartCmd())
+	root.AddCommand(joinCmd(), listCmd(), statusCmd(), secretCmd(), validateCmd(), exportCmd(), unexportCmd(), startCmd(), stopCmd(), restartCmd(), reconcileCmd())
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -576,4 +576,83 @@ func restartCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&command, "command", "c", "", "command to run")
 	return cmd
+}
+
+func reconcileCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "reconcile",
+		Short: "Check and repair all instance exports (skills, hooks, settings)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			reg, err := openRegistry()
+			if err != nil {
+				return err
+			}
+			defer reg.Close()
+
+			instances, err := reg.List()
+			if err != nil {
+				return err
+			}
+			if len(instances) == 0 {
+				fmt.Println("no instances to reconcile")
+				return nil
+			}
+
+			hasError := false
+			for _, inst := range instances {
+				if inst.ManifestPath == "" {
+					continue
+				}
+				plan, err := export.LoadPlan(inst.ManifestPath)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  %s: error loading manifest: %v\n", inst.DalID, err)
+					hasError = true
+					continue
+				}
+
+				homes := map[string]string{}
+				if inst.InstanceRoot != "" {
+					homes = instanceRuntimeHomes(inst.InstanceRoot)
+				}
+
+				result := export.Reconcile(plan, homes)
+
+				// Check process drift (detect only)
+				if inst.InstanceRoot != "" {
+					if hs, err := runner.Check(inst.InstanceRoot); err == nil {
+						if hs.RunStatus == "stopped" && hs.Pid == 0 && hs.StartedAt != "" {
+							result.Repairs = append(result.Repairs, "process: stale pid corrected")
+							if result.Status == "ok" {
+								result.Status = "repaired"
+							}
+						}
+					}
+				}
+
+				switch result.Status {
+				case "ok":
+					fmt.Printf("  %s: ok\n", inst.DalID)
+				case "repaired":
+					fmt.Printf("  %s: repaired\n", inst.DalID)
+					for _, r := range result.Repairs {
+						fmt.Printf("    - %s\n", r)
+					}
+				case "error":
+					hasError = true
+					fmt.Fprintf(os.Stderr, "  %s: error\n", inst.DalID)
+					for _, e := range result.Errors {
+						fmt.Fprintf(os.Stderr, "    - %s\n", e)
+					}
+					for _, r := range result.Repairs {
+						fmt.Printf("    - %s\n", r)
+					}
+				}
+			}
+
+			if hasError {
+				return fmt.Errorf("reconcile completed with errors")
+			}
+			return nil
+		},
+	}
 }
