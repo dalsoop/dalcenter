@@ -12,6 +12,9 @@ type HealthState struct {
 	HealthExit   int    `json:"health_exit"`
 	HealthOutput string `json:"health_output"`
 	CheckedAt    string `json:"checked_at"`
+	Pid          int    `json:"pid,omitempty"`
+	RunStatus    string `json:"run_status,omitempty"` // running, stopped, ""
+	StartedAt    string `json:"started_at,omitempty"`
 }
 
 func Path(instanceRoot string) string {
@@ -19,6 +22,10 @@ func Path(instanceRoot string) string {
 }
 
 func Write(instanceRoot string, s HealthState) error {
+	dir := filepath.Dir(Path(instanceRoot))
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err

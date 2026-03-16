@@ -12,6 +12,7 @@ import (
 
 	"dalforge-hub/dalcenter/internal/export"
 	"dalforge-hub/dalcenter/internal/registry"
+	"dalforge-hub/dalcenter/internal/runner"
 	"dalforge-hub/dalcenter/internal/state"
 	"dalforge-hub/dalcenter/internal/validate"
 	"dalforge-hub/dalcenter/internal/vault"
@@ -69,7 +70,7 @@ func main() {
 		Short: "DalForge local dal center CLI",
 	}
 
-	root.AddCommand(joinCmd(), listCmd(), statusCmd(), secretCmd(), validateCmd(), exportCmd(), unexportCmd())
+	root.AddCommand(joinCmd(), listCmd(), statusCmd(), secretCmd(), validateCmd(), exportCmd(), unexportCmd(), startCmd(), stopCmd(), restartCmd())
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -223,12 +224,21 @@ func statusCmd() *cobra.Command {
 
 			// Merge state.json if available
 			if inst.InstanceRoot != "" {
-				if hs, err := state.Read(inst.InstanceRoot); err == nil {
+				if hs, err := runner.Check(inst.InstanceRoot); err == nil {
 					fmt.Printf("health_status:  %s\n", hs.Status)
 					fmt.Printf("health_exit:    %d\n", hs.HealthExit)
 					fmt.Printf("health_checked: %s\n", hs.CheckedAt)
 					if hs.Status == "fail" && hs.HealthOutput != "" {
 						fmt.Printf("health_output:  %s\n", hs.HealthOutput)
+					}
+					if hs.RunStatus != "" {
+						fmt.Printf("run_status:     %s\n", hs.RunStatus)
+					}
+					if hs.Pid > 0 {
+						fmt.Printf("pid:            %d\n", hs.Pid)
+					}
+					if hs.StartedAt != "" {
+						fmt.Printf("started_at:     %s\n", hs.StartedAt)
 					}
 				}
 			}
@@ -478,4 +488,92 @@ func unexportCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func resolveInstanceRoot(name string) (string, error) {
+	reg, err := openRegistry()
+	if err != nil {
+		return "", err
+	}
+	defer reg.Close()
+	result, err := reg.Status(name)
+	if err != nil {
+		return "", err
+	}
+	if result.Instance.InstanceRoot == "" {
+		return "", fmt.Errorf("instance %q has no instance root", name)
+	}
+	return result.Instance.InstanceRoot, nil
+}
+
+func startCmd() *cobra.Command {
+	var command string
+	cmd := &cobra.Command{
+		Use:   "start <name>",
+		Short: "Start a process in a localdal instance",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			root, err := resolveInstanceRoot(args[0])
+			if err != nil {
+				return err
+			}
+			if command == "" {
+				return fmt.Errorf("--command is required")
+			}
+			pid, err := runner.Start(root, command)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("started (pid %d)\n", pid)
+			return nil
+		},
+	}
+	cmd.Flags().StringVarP(&command, "command", "c", "", "command to run")
+	return cmd
+}
+
+func stopCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "stop <name>",
+		Short: "Stop the running process in a localdal instance",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			root, err := resolveInstanceRoot(args[0])
+			if err != nil {
+				return err
+			}
+			if err := runner.Stop(root); err != nil {
+				return err
+			}
+			fmt.Println("stopped")
+			return nil
+		},
+	}
+}
+
+func restartCmd() *cobra.Command {
+	var command string
+	cmd := &cobra.Command{
+		Use:   "restart <name>",
+		Short: "Restart the process in a localdal instance",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			root, err := resolveInstanceRoot(args[0])
+			if err != nil {
+				return err
+			}
+			runner.Stop(root)
+			if command == "" {
+				return fmt.Errorf("--command is required")
+			}
+			pid, err := runner.Start(root, command)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("restarted (pid %d)\n", pid)
+			return nil
+		},
+	}
+	cmd.Flags().StringVarP(&command, "command", "c", "", "command to run")
+	return cmd
 }
