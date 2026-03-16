@@ -220,3 +220,64 @@ func TestDestroyWithoutPctRecordsError(t *testing.T) {
 		t.Fatalf("vmid should be preserved on error, got %q", hs.VMID)
 	}
 }
+
+func TestDryRunWithPackagesShowsRollback(t *testing.T) {
+	r := Provision("/nonexistent", Spec{
+		Base:         "ubuntu:24.04",
+		InstanceName: "test",
+		VMID:         "211500",
+		Packages:     []string{"bash", "tmux"},
+	}, true)
+	if r.Error != nil {
+		t.Fatalf("dry-run error: %v", r.Error)
+	}
+	// Should have: create, start, update, install, "# on failure:", stop, destroy = 7
+	found := false
+	for _, c := range r.Commands {
+		if c == "# on failure:" {
+			found = true
+		}
+		if found && strings.Contains(c, "pct destroy 211500 --purge") {
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected rollback commands in dry-run, got: %v", r.Commands)
+	}
+}
+
+func TestBuildRollbackCommands(t *testing.T) {
+	cmds := BuildRollbackCommands("999")
+	if len(cmds) != 2 {
+		t.Fatalf("expected 2, got %d", len(cmds))
+	}
+	if !strings.Contains(cmds[0], "stop 999") {
+		t.Fatalf("cmd[0]: %s", cmds[0])
+	}
+	if !strings.Contains(cmds[1], "destroy 999 --purge") {
+		t.Fatalf("cmd[1]: %s", cmds[1])
+	}
+}
+
+func TestProvisionWithPctAbsentRecordsNoRollback(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "state"), 0755)
+
+	origPath := os.Getenv("PATH")
+	os.Setenv("PATH", "/nonexistent")
+	defer os.Setenv("PATH", origPath)
+
+	r := Provision(dir, Spec{
+		Base:         "ubuntu:24.04",
+		InstanceName: "test",
+		Packages:     []string{"bash"},
+	}, false)
+
+	if r.Error == nil {
+		t.Fatal("expected error")
+	}
+	hs, _ := state.Read(dir)
+	if hs.RollbackStatus != "" {
+		t.Fatalf("expected empty rollback (pct absent, no create happened), got %q", hs.RollbackStatus)
+	}
+}

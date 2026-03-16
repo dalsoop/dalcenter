@@ -57,7 +57,6 @@ func BuildAllCommands(spec Spec) []string {
 		vmid = "0"
 	}
 
-	// Start container for package install
 	if len(spec.Packages) > 0 {
 		cmds = append(cmds, fmt.Sprintf("pct start %s", vmid))
 		cmds = append(cmds, fmt.Sprintf("pct exec %s -- apt-get update -qq", vmid))
@@ -67,18 +66,41 @@ func BuildAllCommands(spec Spec) []string {
 	return cmds
 }
 
+// BuildRollbackCommands returns stop + destroy for a failed provision.
+func BuildRollbackCommands(vmid string) []string {
+	return []string{
+		fmt.Sprintf("pct stop %s --skiplock", vmid),
+		fmt.Sprintf("pct destroy %s --purge", vmid),
+	}
+}
+
+// BuildAllCommandsWithRollback returns provision commands + rollback suffix for dry-run display.
+func BuildAllCommandsWithRollback(spec Spec) []string {
+	cmds := BuildAllCommands(spec)
+	vmid := spec.VMID
+	if vmid == "" {
+		vmid = "0"
+	}
+	if len(spec.Packages) > 0 {
+		cmds = append(cmds, "# on failure:")
+		cmds = append(cmds, BuildRollbackCommands(vmid)...)
+	}
+	return cmds
+}
+
 // Provision runs pct create (+ optional package install) and records result in state.json.
 func Provision(instanceRoot string, spec Spec, dryRun bool) Result {
-	cmds := BuildAllCommands(spec)
-
 	if dryRun {
+		cmds := BuildAllCommandsWithRollback(spec)
 		return Result{Commands: cmds}
 	}
+
+	cmds := BuildAllCommands(spec)
 
 	// Check pct exists
 	if _, err := exec.LookPath("pct"); err != nil {
 		r := Result{Commands: cmds, Error: fmt.Errorf("pct not found in PATH")}
-		writeProvisionState(instanceRoot, "", "error", r.Error.Error())
+		writeProvisionState(instanceRoot, "", "error", r.Error.Error(), "")
 		return r
 	}
 
@@ -94,7 +116,7 @@ func Provision(instanceRoot string, spec Spec, dryRun bool) Result {
 			errMsg = err.Error()
 		}
 		r := Result{Commands: cmds, Error: fmt.Errorf("pct create failed: %s", errMsg)}
-		writeProvisionState(instanceRoot, "", "error", errMsg)
+		writeProvisionState(instanceRoot, "", "error", errMsg, "")
 		return r
 	}
 
@@ -116,17 +138,32 @@ func Provision(instanceRoot string, spec Spec, dryRun bool) Result {
 			stepCmd := exec.Command("pct", step...)
 			if stepOut, err := stepCmd.CombinedOutput(); err != nil {
 				errMsg := strings.TrimSpace(string(stepOut))
-				writeProvisionState(instanceRoot, vmid, "error", "package install: "+errMsg)
-				return Result{VMID: vmid, Commands: cmds, Error: fmt.Errorf("package install failed: %s", errMsg)}
+				// Rollback: stop + destroy
+				rbStatus := rollback(vmid)
+				writeProvisionState(instanceRoot, vmid, "error", "package install: "+errMsg, rbStatus)
+				return Result{VMID: vmid, Commands: cmds, Error: fmt.Errorf("package install failed (rollback %s): %s", rbStatus, errMsg)}
 			}
 		}
 	}
 
-	writeProvisionState(instanceRoot, vmid, "provisioned", "")
+	writeProvisionState(instanceRoot, vmid, "provisioned", "", "")
 	return Result{VMID: vmid, Commands: cmds}
 }
 
-func writeProvisionState(instanceRoot, vmid, status, errMsg string) {
+func rollback(vmid string) string {
+	for _, args := range [][]string{
+		{"stop", vmid, "--skiplock"},
+		{"destroy", vmid, "--purge"},
+	} {
+		cmd := exec.Command("pct", args...)
+		if _, err := cmd.CombinedOutput(); err != nil {
+			return "failed"
+		}
+	}
+	return "attempted"
+}
+
+func writeProvisionState(instanceRoot, vmid, status, errMsg, rollbackStatus string) {
 	hs, _ := state.Read(instanceRoot)
 	if hs == nil {
 		hs = &state.HealthState{}
@@ -135,6 +172,7 @@ func writeProvisionState(instanceRoot, vmid, status, errMsg string) {
 	hs.ProvisionStatus = status
 	hs.ProvisionedAt = time.Now().UTC().Format(time.RFC3339)
 	hs.ProvisionError = errMsg
+	hs.RollbackStatus = rollbackStatus
 	state.Write(instanceRoot, *hs)
 }
 
