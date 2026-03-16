@@ -207,10 +207,17 @@ func statusCmd() *cobra.Command {
 				return err
 			}
 			defer reg.Close()
-			inst, err := reg.Status(args[0])
+			result, err := reg.Status(args[0])
 			if err != nil {
 				return err
 			}
+			if len(result.Candidates) > 1 {
+				fmt.Fprintf(os.Stderr, "warning: %d instances match %q, showing most recent:\n", len(result.Candidates), args[0])
+				for _, c := range result.Candidates {
+					fmt.Fprintf(os.Stderr, "  %s  %s\n", c.DalID, c.RepoRoot)
+				}
+			}
+			inst := result.Instance
 			fmt.Printf("dal_id:         %s\ntemplate:       %s\nstatus:         %s\ncontainer_id:   %s\nrepo_root:      %s\nmanifest_path:  %s\ninstance_root:  %s\nexported_skills:%d\ncreated_at:     %s\n",
 				inst.DalID, inst.Template, inst.Status, inst.ContainerID, inst.RepoRoot, inst.ManifestPath, inst.InstanceRoot, inst.ExportedSkills, inst.CreatedAt)
 

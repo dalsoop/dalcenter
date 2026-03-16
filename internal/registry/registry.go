@@ -136,24 +136,31 @@ func (r *Registry) List() ([]Instance, error) {
 	return out, rows.Err()
 }
 
-func (r *Registry) Status(name string) (*Instance, error) {
+// StatusResult contains the matched instance and any additional candidates.
+type StatusResult struct {
+	Instance   *Instance
+	Candidates []Instance // all matches (len > 1 means ambiguous)
+}
+
+func (r *Registry) Status(name string) (*StatusResult, error) {
 	// Try exact dal_id first
 	inst, err := r.statusByDalID(name)
 	if err == nil {
-		return inst, nil
+		return &StatusResult{Instance: inst}, nil
 	}
 
 	// Fallback: match by repo name (agent-coach, dalcli-agent-coach)
-	candidates := []string{name}
+	patterns := []string{name}
 	if !strings.HasPrefix(name, "dalcli-") {
-		candidates = append(candidates, "dalcli-"+name)
+		patterns = append(patterns, "dalcli-"+name)
 	}
-	for _, candidate := range candidates {
+	for _, candidate := range patterns {
 		pattern := "%" + candidate + "%"
-		inst, err := r.statusByPattern(pattern)
-		if err == nil {
-			return inst, nil
+		matches, err := r.searchByPattern(pattern)
+		if err != nil || len(matches) == 0 {
+			continue
 		}
+		return &StatusResult{Instance: &matches[0], Candidates: matches}, nil
 	}
 
 	return nil, fmt.Errorf("instance %q not found", name)
@@ -170,16 +177,24 @@ func (r *Registry) statusByDalID(dalID string) (*Instance, error) {
 	return &i, nil
 }
 
-func (r *Registry) statusByPattern(pattern string) (*Instance, error) {
-	var i Instance
-	err := r.db.QueryRow(
-		"SELECT dal_id, node_id, template, status, container_id, repo_root, manifest_path, instance_root, exported_skills, created_at FROM instances WHERE repo_root LIKE ? OR manifest_path LIKE ? ORDER BY created_at DESC LIMIT 1",
+func (r *Registry) searchByPattern(pattern string) ([]Instance, error) {
+	rows, err := r.db.Query(
+		"SELECT dal_id, node_id, template, status, container_id, repo_root, manifest_path, instance_root, exported_skills, created_at FROM instances WHERE repo_root LIKE ? OR manifest_path LIKE ? ORDER BY created_at DESC",
 		pattern, pattern,
-	).Scan(&i.DalID, &i.NodeID, &i.Template, &i.Status, &i.ContainerID, &i.RepoRoot, &i.ManifestPath, &i.InstanceRoot, &i.ExportedSkills, &i.CreatedAt)
+	)
 	if err != nil {
 		return nil, err
 	}
-	return &i, nil
+	defer rows.Close()
+	var out []Instance
+	for rows.Next() {
+		var i Instance
+		if err := rows.Scan(&i.DalID, &i.NodeID, &i.Template, &i.Status, &i.ContainerID, &i.RepoRoot, &i.ManifestPath, &i.InstanceRoot, &i.ExportedSkills, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, i)
+	}
+	return out, rows.Err()
 }
 
 func (r *Registry) UpdateInstanceRoot(dalID, instanceRoot string) error {
