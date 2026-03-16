@@ -39,7 +39,8 @@ type Package struct {
 }
 
 func Open(dbPath string) (*Registry, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	dsn := dbPath + "?_pragma=busy_timeout%3d5000&_pragma=journal_mode%3dWAL"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open registry db: %w", err)
 	}

@@ -1,8 +1,10 @@
 package registry
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -106,5 +108,56 @@ func TestStatusFullNameMatch(t *testing.T) {
 	}
 	if result.Instance.DalID != inst.DalID {
 		t.Fatalf("expected %s, got %s", inst.DalID, result.Instance.DalID)
+	}
+}
+
+func TestConcurrentJoinAndList(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "concurrent.db")
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 20)
+
+	// 10 concurrent joins
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			reg, err := Open(dbPath)
+			if err != nil {
+				errCh <- fmt.Errorf("open for join %d: %w", n, err)
+				return
+			}
+			defer reg.Close()
+			_, err = reg.Join("default", fmt.Sprintf("/repo/pkg-%d", n), fmt.Sprintf("/repo/pkg-%d/dal.cue", n), "", n)
+			if err != nil {
+				errCh <- fmt.Errorf("join %d: %w", n, err)
+			}
+		}(i)
+	}
+
+	// 10 concurrent lists
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			reg, err := Open(dbPath)
+			if err != nil {
+				errCh <- fmt.Errorf("open for list %d: %w", n, err)
+				return
+			}
+			defer reg.Close()
+			_, err = reg.List()
+			if err != nil {
+				errCh <- fmt.Errorf("list %d: %w", n, err)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		t.Errorf("concurrent error: %v", err)
 	}
 }
