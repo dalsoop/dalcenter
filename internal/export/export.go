@@ -14,9 +14,10 @@ import (
 
 // Plan captures a single repo export operation.
 type Plan struct {
-	RepoRoot string
-	Manifest string
-	Exports  map[string][]string
+	RepoRoot       string
+	Manifest       string
+	Exports        map[string][]string
+	HealthCheckCmd string
 }
 
 // SkillCount returns the number of declared exported skills across runtimes.
@@ -54,6 +55,13 @@ func LoadPlan(path string) (*Plan, error) {
 	}
 
 	for _, templateName := range templateNames(val) {
+		hcPath := cue.ParsePath("templates." + quoteLabel(templateName) + ".health_check.command")
+		if hcVal := val.LookupPath(hcPath); hcVal.Exists() {
+			if s, err := hcVal.String(); err == nil {
+				plan.HealthCheckCmd = s
+			}
+		}
+
 		exportsPath := cue.ParsePath("templates." + quoteLabel(templateName) + ".exports")
 		exportsVal := val.LookupPath(exportsPath)
 		if !exportsVal.Exists() {

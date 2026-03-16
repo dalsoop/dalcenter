@@ -1,13 +1,18 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"text/tabwriter"
+	"time"
 
 	"dalforge-hub/dalcenter/internal/export"
 	"dalforge-hub/dalcenter/internal/registry"
+	"dalforge-hub/dalcenter/internal/state"
 	"dalforge-hub/dalcenter/internal/validate"
 	"dalforge-hub/dalcenter/internal/vault"
 
@@ -115,9 +120,46 @@ func joinCmd() *cobra.Command {
 				}
 			}
 			fmt.Printf("instance created: %s (template=%s, skills=%d)\n", inst.DalID, inst.Template, inst.ExportedSkills)
+
+			// Health check (1-shot, non-blocking)
+			if plan.HealthCheckCmd != "" {
+				hs := runHealthCheck(plan.RepoRoot, plan.HealthCheckCmd)
+				if err := state.Write(actualRoot, hs); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: failed to write state: %v\n", err)
+				}
+				if hs.Status == "fail" {
+					fmt.Fprintf(os.Stderr, "warning: health check failed (exit %d): %s\n", hs.HealthExit, hs.HealthOutput)
+				} else {
+					fmt.Printf("health check: ok\n")
+				}
+			}
+
 			return nil
 		},
 	}
+}
+
+func runHealthCheck(repoRoot, command string) state.HealthState {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd.Dir = repoRoot
+	out, err := cmd.CombinedOutput()
+
+	output := strings.TrimSpace(string(out))
+	if len(output) > 200 {
+		output = output[:200]
+	}
+
+	if err != nil {
+		exitCode := 1
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		}
+		return state.New("fail", exitCode, output)
+	}
+	return state.New("ok", 0, output)
 }
 
 func listCmd() *cobra.Command {
@@ -139,9 +181,15 @@ func listCmd() *cobra.Command {
 				return nil
 			}
 			tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "DAL_ID\tTEMPLATE\tSTATUS\tSKILLS\tREPO\tINSTANCE_ROOT\tCREATED")
+			fmt.Fprintln(tw, "DAL_ID\tTEMPLATE\tSTATUS\tHEALTH\tSKILLS\tCREATED")
 			for _, i := range instances {
-				fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\t%s\t%s\n", i.DalID, i.Template, i.Status, i.ExportedSkills, i.RepoRoot, i.InstanceRoot, i.CreatedAt)
+				health := "-"
+				if i.InstanceRoot != "" {
+					if hs, err := state.Read(i.InstanceRoot); err == nil {
+						health = hs.Status
+					}
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\n", i.DalID, i.Template, i.Status, health, i.ExportedSkills, i.CreatedAt)
 			}
 			return tw.Flush()
 		},
@@ -165,6 +213,18 @@ func statusCmd() *cobra.Command {
 			}
 			fmt.Printf("dal_id:         %s\ntemplate:       %s\nstatus:         %s\ncontainer_id:   %s\nrepo_root:      %s\nmanifest_path:  %s\ninstance_root:  %s\nexported_skills:%d\ncreated_at:     %s\n",
 				inst.DalID, inst.Template, inst.Status, inst.ContainerID, inst.RepoRoot, inst.ManifestPath, inst.InstanceRoot, inst.ExportedSkills, inst.CreatedAt)
+
+			// Merge state.json if available
+			if inst.InstanceRoot != "" {
+				if hs, err := state.Read(inst.InstanceRoot); err == nil {
+					fmt.Printf("health_status:  %s\n", hs.Status)
+					fmt.Printf("health_exit:    %d\n", hs.HealthExit)
+					fmt.Printf("health_checked: %s\n", hs.CheckedAt)
+					if hs.Status == "fail" && hs.HealthOutput != "" {
+						fmt.Printf("health_output:  %s\n", hs.HealthOutput)
+					}
+				}
+			}
 			return nil
 		},
 	}
