@@ -183,10 +183,10 @@ func listCmd() *cobra.Command {
 			tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 			fmt.Fprintln(tw, "DAL_ID\tTEMPLATE\tSTATUS\tHEALTH\tSKILLS\tCREATED")
 			for _, i := range instances {
-				health := "-"
+				health := "unchecked"
 				if i.InstanceRoot != "" {
 					if hs, err := state.Read(i.InstanceRoot); err == nil {
-						health = hs.Status
+						health = formatHealth(hs)
 					}
 				}
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\n", i.DalID, i.Template, i.Status, health, i.ExportedSkills, i.CreatedAt)
@@ -254,6 +254,36 @@ func instanceRuntimeHomes(instanceRoot string) map[string]string {
 	return map[string]string{
 		"claude": filepath.Join(instanceRoot, "runtime", "claude"),
 		"codex":  filepath.Join(instanceRoot, "runtime", "codex"),
+	}
+}
+
+func formatHealth(hs *state.HealthState) string {
+	ago := relativeTime(hs.CheckedAt)
+	switch hs.Status {
+	case "ok":
+		return fmt.Sprintf("ok(%s)", ago)
+	case "fail":
+		return fmt.Sprintf("fail(%s)", ago)
+	default:
+		return "unchecked"
+	}
+}
+
+func relativeTime(rfc3339 string) string {
+	t, err := time.Parse(time.RFC3339, rfc3339)
+	if err != nil {
+		return "?"
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds ago", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 	}
 }
 
