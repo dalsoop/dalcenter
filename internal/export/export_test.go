@@ -3,6 +3,7 @@ package export
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -129,5 +130,104 @@ func TestRemove(t *testing.T) {
 	}
 	if _, err := os.Lstat(codexLink); !os.IsNotExist(err) {
 		t.Fatalf("expected codex symlink removed, got err=%v", err)
+	}
+}
+
+func TestHooksExportAndRemove(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	hookFile := filepath.Join(repo, "hooks", "pre-commit.sh")
+	manifestDir := filepath.Join(repo, ".dalfactory")
+	manifestPath := filepath.Join(manifestDir, "dal.cue")
+	claudeHome := filepath.Join(root, ".claude")
+
+	if err := os.MkdirAll(filepath.Dir(hookFile), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(manifestDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hookFile, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, []byte(`schema_version: "1.0.0"
+dal: {
+	id:       "DAL:CLI:hooktest1"
+	name:     "hook-demo"
+	version:  "0.1.0"
+	category: "CLI"
+}
+templates: default: {
+	schema_version: "1.0.0"
+	name:           "default"
+	container: {
+		base:   "ubuntu:24.04"
+		agents: {}
+	}
+	exports: claude: {
+		hooks: ["hooks/pre-commit.sh"]
+	}
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("DALCENTER_CLAUDE_HOME", claudeHome)
+
+	// LoadPlan parses hooks
+	plan, err := LoadPlan(repo)
+	if err != nil {
+		t.Fatalf("LoadPlan: %v", err)
+	}
+	if got := len(plan.Hooks["claude"]); got != 1 {
+		t.Fatalf("expected 1 claude hook, got %d", got)
+	}
+
+	// Apply creates hook symlink
+	if err := Apply(plan); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	dst := filepath.Join(claudeHome, "hooks", "pre-commit.sh")
+	target, err := os.Readlink(dst)
+	if err != nil {
+		t.Fatalf("Readlink hook: %v", err)
+	}
+	if target != hookFile {
+		t.Fatalf("hook symlink target = %s, want %s", target, hookFile)
+	}
+
+	// Remove deletes hook symlink
+	if err := Remove(plan); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err := os.Lstat(dst); !os.IsNotExist(err) {
+		t.Fatalf("expected hook symlink removed, got err=%v", err)
+	}
+}
+
+func TestApplyReturnsErrorForMissingHookPath(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	claudeHome := filepath.Join(root, ".claude")
+
+	if err := os.MkdirAll(repo, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("DALCENTER_CLAUDE_HOME", claudeHome)
+
+	plan := &Plan{
+		RepoRoot: repo,
+		Hooks: map[string][]string{
+			"claude": {"hooks/missing-hook.sh"},
+		},
+	}
+
+	err := Apply(plan)
+	if err == nil {
+		t.Fatal("Apply returned nil error for missing hook path")
+	}
+	if got := err.Error(); !strings.Contains(got, "stat hook file") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
