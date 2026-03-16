@@ -19,7 +19,8 @@ type HealthState struct {
 	ProvisionStatus string `json:"provision_status,omitempty"` // provisioned, error, ""
 	ProvisionedAt   string `json:"provisioned_at,omitempty"`
 	ProvisionError  string `json:"provision_error,omitempty"`
-	RollbackStatus  string `json:"rollback_status,omitempty"` // attempted, failed, ""
+	RollbackStatus  string                    `json:"rollback_status,omitempty"`
+	AgentStatuses   map[string]string         `json:"agent_statuses,omitempty"` // name -> installed/skipped/error
 }
 
 func Path(instanceRoot string) string {

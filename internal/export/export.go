@@ -20,9 +20,18 @@ type Plan struct {
 	Hooks          map[string][]string // runtime -> hook paths
 	HealthCheckCmd string
 	DefaultCmd     string   // build.entry from .dalfactory
-	AgentPackages    []string // container.agents[*].package values
-	ContainerBase    string   // container.base from .dalfactory
-	ContainerPackages []string // container.packages from .dalfactory
+	AgentPackages     []string       // container.agents[*].package values
+	ContainerBase     string         // container.base from .dalfactory
+	ContainerPackages []string       // container.packages from .dalfactory
+	Agents            []AgentSpec    // container.agents full specs
+}
+
+// AgentSpec describes one agent to install in a container.
+type AgentSpec struct {
+	Name    string // map key (e.g. "claude")
+	Type    string // claude_sdk, codex_appserver, gemini_cli, openai_compatible
+	Package string // install package/binary
+	Model   string // optional model name
 }
 
 // SkillCount returns the number of declared exported skills across runtimes.
@@ -98,17 +107,25 @@ func LoadPlan(path string) (*Plan, error) {
 			}
 		}
 
-		// Extract container.agents[*].package as fallback commands
+		// Extract container.agents as full specs + package fallback list
 		agentsPath := cue.ParsePath("templates." + quoteLabel(templateName) + ".container.agents")
 		if agentsVal := val.LookupPath(agentsPath); agentsVal.Exists() {
 			if fields, err := agentsVal.Fields(); err == nil {
 				for fields.Next() {
-					pkgVal := fields.Value().LookupPath(cue.ParsePath("package"))
-					if pkgVal.Exists() {
-						if s, err := pkgVal.String(); err == nil {
-							plan.AgentPackages = append(plan.AgentPackages, s)
-						}
+					agentName := fields.Label()
+					v := fields.Value()
+					spec := AgentSpec{Name: agentName}
+					if tv := v.LookupPath(cue.ParsePath("type")); tv.Exists() {
+						spec.Type, _ = tv.String()
 					}
+					if pv := v.LookupPath(cue.ParsePath("package")); pv.Exists() {
+						spec.Package, _ = pv.String()
+						plan.AgentPackages = append(plan.AgentPackages, spec.Package)
+					}
+					if mv := v.LookupPath(cue.ParsePath("model")); mv.Exists() {
+						spec.Model, _ = mv.String()
+					}
+					plan.Agents = append(plan.Agents, spec)
 				}
 			}
 		}

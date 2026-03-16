@@ -809,6 +809,7 @@ func provisionCmd() *cobra.Command {
 				InstanceName: inst.DalID,
 				VMID:         vmid,
 				Packages:     plan.ContainerPackages,
+				Agents:       plan.Agents,
 			}
 
 			r := provision.Provision(inst.InstanceRoot, spec, dryRun)

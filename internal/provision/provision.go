@@ -6,15 +6,17 @@ import (
 	"strings"
 	"time"
 
+	"dalforge-hub/dalcenter/internal/export"
 	"dalforge-hub/dalcenter/internal/state"
 )
 
 // Spec describes what to provision.
 type Spec struct {
-	Base         string   // e.g. "ubuntu:24.04"
-	InstanceName string   // used as hostname/CT description
-	VMID         string   // if empty, auto-assigned by pct
-	Packages     []string // apt packages to install after create
+	Base         string             // e.g. "ubuntu:24.04"
+	InstanceName string             // used as hostname/CT description
+	VMID         string             // if empty, auto-assigned by pct
+	Packages     []string           // apt packages to install after create
+	Agents       []export.AgentSpec // agents to install after packages
 }
 
 // Result of a provision attempt.
@@ -47,7 +49,24 @@ func BuildCommand(spec Spec) []string {
 	return args
 }
 
-// BuildAllCommands returns the full provision command sequence: create + start + install.
+// BuildAgentInstallCommand returns the pct exec command to install one agent.
+func BuildAgentInstallCommand(vmid string, agent export.AgentSpec) string {
+	switch agent.Type {
+	case "claude_sdk":
+		return fmt.Sprintf("pct exec %s -- npm install -g %s", vmid, agent.Package)
+	case "codex_appserver":
+		return fmt.Sprintf("pct exec %s -- npm install -g %s", vmid, agent.Package)
+	case "gemini_cli":
+		return fmt.Sprintf("pct exec %s -- pip3 install %s", vmid, agent.Package)
+	case "openai_compatible":
+		// Config marker only — no install command
+		return fmt.Sprintf("# %s: openai_compatible (config-only, package=%s)", agent.Name, agent.Package)
+	default:
+		return fmt.Sprintf("# %s: unknown type %q (skipped)", agent.Name, agent.Type)
+	}
+}
+
+// BuildAllCommands returns the full provision command sequence: create + start + install + agents.
 func BuildAllCommands(spec Spec) []string {
 	createArgs := BuildCommand(spec)
 	cmds := []string{"pct " + strings.Join(createArgs, " ")}
@@ -57,10 +76,18 @@ func BuildAllCommands(spec Spec) []string {
 		vmid = "0"
 	}
 
-	if len(spec.Packages) > 0 {
+	needsStart := len(spec.Packages) > 0 || len(spec.Agents) > 0
+	if needsStart {
 		cmds = append(cmds, fmt.Sprintf("pct start %s", vmid))
+	}
+
+	if len(spec.Packages) > 0 {
 		cmds = append(cmds, fmt.Sprintf("pct exec %s -- apt-get update -qq", vmid))
 		cmds = append(cmds, fmt.Sprintf("pct exec %s -- apt-get install -y -qq %s", vmid, strings.Join(spec.Packages, " ")))
+	}
+
+	for _, agent := range spec.Agents {
+		cmds = append(cmds, BuildAgentInstallCommand(vmid, agent))
 	}
 
 	return cmds
@@ -146,7 +173,36 @@ func Provision(instanceRoot string, spec Spec, dryRun bool) Result {
 		}
 	}
 
+	// Install agents
+	agentStatuses := map[string]string{}
+	for _, agent := range spec.Agents {
+		if agent.Type == "openai_compatible" {
+			agentStatuses[agent.Name] = "skipped"
+			continue
+		}
+		installCmd := BuildAgentInstallCommand(vmid, agent)
+		if strings.HasPrefix(installCmd, "#") {
+			agentStatuses[agent.Name] = "skipped"
+			continue
+		}
+		stepCmd := exec.Command("sh", "-c", installCmd)
+		if stepOut, err := stepCmd.CombinedOutput(); err != nil {
+			errMsg := strings.TrimSpace(string(stepOut))
+			agentStatuses[agent.Name] = "error: " + errMsg
+			// Agent install failure is non-fatal — continue with others
+			continue
+		}
+		agentStatuses[agent.Name] = "installed"
+	}
+
 	writeProvisionState(instanceRoot, vmid, "provisioned", "", "")
+	// Record agent statuses
+	if len(agentStatuses) > 0 {
+		if hs, err := state.Read(instanceRoot); err == nil {
+			hs.AgentStatuses = agentStatuses
+			state.Write(instanceRoot, *hs)
+		}
+	}
 	return Result{VMID: vmid, Commands: cmds}
 }
 

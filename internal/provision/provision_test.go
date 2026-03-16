@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"dalforge-hub/dalcenter/internal/export"
+
 	"dalforge-hub/dalcenter/internal/state"
 )
 
@@ -279,5 +281,66 @@ func TestProvisionWithPctAbsentRecordsNoRollback(t *testing.T) {
 	hs, _ := state.Read(dir)
 	if hs.RollbackStatus != "" {
 		t.Fatalf("expected empty rollback (pct absent, no create happened), got %q", hs.RollbackStatus)
+	}
+}
+
+func TestBuildAgentInstallCommands(t *testing.T) {
+	cases := []struct {
+		agent  export.AgentSpec
+		expect string
+	}{
+		{export.AgentSpec{Name: "claude", Type: "claude_sdk", Package: "@anthropic-ai/claude-code"}, "npm install -g @anthropic-ai/claude-code"},
+		{export.AgentSpec{Name: "codex", Type: "codex_appserver", Package: "@openai/codex"}, "npm install -g @openai/codex"},
+		{export.AgentSpec{Name: "gemini", Type: "gemini_cli", Package: "gemini-cli"}, "pip3 install gemini-cli"},
+		{export.AgentSpec{Name: "gpt4", Type: "openai_compatible", Package: "openai"}, "# gpt4: openai_compatible"},
+		{export.AgentSpec{Name: "x", Type: "unknown_type", Package: "x"}, "# x: unknown type"},
+	}
+	for _, tc := range cases {
+		cmd := BuildAgentInstallCommand("211500", tc.agent)
+		if !strings.Contains(cmd, tc.expect) {
+			t.Errorf("agent %s: expected %q in %q", tc.agent.Name, tc.expect, cmd)
+		}
+	}
+}
+
+func TestBuildAllCommandsWithAgents(t *testing.T) {
+	cmds := BuildAllCommands(Spec{
+		Base:         "ubuntu:24.04",
+		InstanceName: "test",
+		VMID:         "211500",
+		Packages:     []string{"bash"},
+		Agents: []export.AgentSpec{
+			{Name: "claude", Type: "claude_sdk", Package: "@anthropic-ai/claude-code"},
+			{Name: "gpt4", Type: "openai_compatible", Package: "openai"},
+		},
+	})
+
+	// create + start + update + install + claude npm + gpt4 comment = 6
+	if len(cmds) != 6 {
+		t.Fatalf("expected 6 commands, got %d: %v", len(cmds), cmds)
+	}
+	if !strings.Contains(cmds[4], "npm install -g @anthropic-ai/claude-code") {
+		t.Fatalf("cmd[4]: %s", cmds[4])
+	}
+	if !strings.Contains(cmds[5], "# gpt4: openai_compatible") {
+		t.Fatalf("cmd[5]: %s", cmds[5])
+	}
+}
+
+func TestBuildAllCommandsAgentsOnlyNoPackages(t *testing.T) {
+	cmds := BuildAllCommands(Spec{
+		Base:         "ubuntu:24.04",
+		InstanceName: "test",
+		VMID:         "211500",
+		Agents: []export.AgentSpec{
+			{Name: "claude", Type: "claude_sdk", Package: "@anthropic-ai/claude-code"},
+		},
+	})
+	// create + start + agent install = 3
+	if len(cmds) != 3 {
+		t.Fatalf("expected 3 commands, got %d: %v", len(cmds), cmds)
+	}
+	if !strings.Contains(cmds[1], "pct start") {
+		t.Fatalf("expected start, got: %s", cmds[1])
 	}
 }
