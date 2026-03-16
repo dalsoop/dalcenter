@@ -7,6 +7,7 @@ import (
 	"text/tabwriter"
 
 	"dalforge-hub/dalcenter/internal/registry"
+	"dalforge-hub/dalcenter/internal/validate"
 	"dalforge-hub/dalcenter/internal/vault"
 
 	"github.com/spf13/cobra"
@@ -23,6 +24,19 @@ func dataDir() string {
 
 func ensureDataDir() error {
 	return os.MkdirAll(dataDir(), 0700)
+}
+
+func specPath() string {
+	if p := os.Getenv("DALCENTER_SPEC"); p != "" {
+		return p
+	}
+	if wd, err := os.Getwd(); err == nil {
+		candidate := filepath.Join(wd, "dal.spec.cue")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return filepath.Join("/root", "dalforge-dalcenter", "dal.spec.cue")
 }
 
 func openVault() (*vault.SecretVault, error) {
@@ -45,7 +59,7 @@ func main() {
 		Short: "DalForge local dal center CLI",
 	}
 
-	root.AddCommand(joinCmd(), listCmd(), statusCmd(), secretCmd())
+	root.AddCommand(joinCmd(), listCmd(), statusCmd(), secretCmd(), validateCmd())
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -202,6 +216,41 @@ func secretListCmd() *cobra.Command {
 				fmt.Fprintf(tw, "%s\t%s\n", e.Name, e.UpdatedAt)
 			}
 			return tw.Flush()
+		},
+	}
+}
+
+func validateCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "validate [repo-or-manifest...]",
+		Short: "Validate .dalfactory manifests against dal.spec.cue",
+		Args:  cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			paths := args
+			if len(paths) == 0 {
+				paths = []string{"."}
+			}
+
+			specPath := specPath()
+			hasError := false
+			for _, path := range paths {
+				manifestPath, err := validate.ResolveManifestPath(path)
+				if err != nil {
+					hasError = true
+					fmt.Fprintf(os.Stderr, "invalid %s: %v\n", path, err)
+					continue
+				}
+				if _, err := validate.Manifest(specPath, manifestPath); err != nil {
+					hasError = true
+					fmt.Fprintf(os.Stderr, "invalid %s: %v\n", manifestPath, err)
+					continue
+				}
+				fmt.Printf("ok %s\n", manifestPath)
+			}
+			if hasError {
+				return fmt.Errorf("manifest validation failed")
+			}
+			return nil
 		},
 	}
 }
