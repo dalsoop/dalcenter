@@ -64,8 +64,44 @@ func TestDryRunDoesNotExecute(t *testing.T) {
 	if result.Error != nil {
 		t.Fatalf("dry-run should not error: %v", result.Error)
 	}
-	if !strings.Contains(result.Command, "pct create") {
-		t.Fatalf("expected pct command, got: %s", result.Command)
+	if len(result.Commands) == 0 || !strings.Contains(result.Commands[0], "pct create") {
+		t.Fatalf("expected pct command, got: %v", result.Commands)
+	}
+}
+
+func TestBuildAllCommandsWithPackages(t *testing.T) {
+	cmds := BuildAllCommands(Spec{
+		Base:         "ubuntu:24.04",
+		InstanceName: "test",
+		VMID:         "211500",
+		Packages:     []string{"bash", "python3", "tmux"},
+	})
+
+	if len(cmds) != 4 {
+		t.Fatalf("expected 4 commands (create+start+update+install), got %d: %v", len(cmds), cmds)
+	}
+	if !strings.Contains(cmds[0], "pct create 211500") {
+		t.Fatalf("cmd[0]: %s", cmds[0])
+	}
+	if !strings.Contains(cmds[1], "pct start 211500") {
+		t.Fatalf("cmd[1]: %s", cmds[1])
+	}
+	if !strings.Contains(cmds[2], "apt-get update") {
+		t.Fatalf("cmd[2]: %s", cmds[2])
+	}
+	if !strings.Contains(cmds[3], "apt-get install") || !strings.Contains(cmds[3], "bash python3 tmux") {
+		t.Fatalf("cmd[3]: %s", cmds[3])
+	}
+}
+
+func TestBuildAllCommandsNoPackages(t *testing.T) {
+	cmds := BuildAllCommands(Spec{
+		Base:         "ubuntu:24.04",
+		InstanceName: "test",
+		VMID:         "211500",
+	})
+	if len(cmds) != 1 {
+		t.Fatalf("expected 1 command (create only), got %d", len(cmds))
 	}
 }
 

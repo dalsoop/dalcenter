@@ -11,16 +11,17 @@ import (
 
 // Spec describes what to provision.
 type Spec struct {
-	Base         string // e.g. "ubuntu:24.04"
-	InstanceName string // used as hostname/CT description
-	VMID         string // if empty, auto-assigned by pct
+	Base         string   // e.g. "ubuntu:24.04"
+	InstanceName string   // used as hostname/CT description
+	VMID         string   // if empty, auto-assigned by pct
+	Packages     []string // apt packages to install after create
 }
 
 // Result of a provision attempt.
 type Result struct {
-	VMID    string
-	Command string // the constructed command (for dry-run)
-	Error   error
+	VMID     string
+	Commands []string // all constructed commands (for dry-run)
+	Error    error
 }
 
 // BuildCommand constructs the pct create command args without executing.
@@ -46,23 +47,44 @@ func BuildCommand(spec Spec) []string {
 	return args
 }
 
-// Provision runs pct create and records result in state.json.
+// BuildAllCommands returns the full provision command sequence: create + start + install.
+func BuildAllCommands(spec Spec) []string {
+	createArgs := BuildCommand(spec)
+	cmds := []string{"pct " + strings.Join(createArgs, " ")}
+
+	vmid := spec.VMID
+	if vmid == "" {
+		vmid = "0"
+	}
+
+	// Start container for package install
+	if len(spec.Packages) > 0 {
+		cmds = append(cmds, fmt.Sprintf("pct start %s", vmid))
+		cmds = append(cmds, fmt.Sprintf("pct exec %s -- apt-get update -qq", vmid))
+		cmds = append(cmds, fmt.Sprintf("pct exec %s -- apt-get install -y -qq %s", vmid, strings.Join(spec.Packages, " ")))
+	}
+
+	return cmds
+}
+
+// Provision runs pct create (+ optional package install) and records result in state.json.
 func Provision(instanceRoot string, spec Spec, dryRun bool) Result {
-	args := BuildCommand(spec)
-	cmdStr := "pct " + strings.Join(args, " ")
+	cmds := BuildAllCommands(spec)
 
 	if dryRun {
-		return Result{Command: cmdStr}
+		return Result{Commands: cmds}
 	}
 
 	// Check pct exists
 	if _, err := exec.LookPath("pct"); err != nil {
-		r := Result{Command: cmdStr, Error: fmt.Errorf("pct not found in PATH")}
+		r := Result{Commands: cmds, Error: fmt.Errorf("pct not found in PATH")}
 		writeProvisionState(instanceRoot, "", "error", r.Error.Error())
 		return r
 	}
 
-	cmd := exec.Command("pct", args...)
+	// Execute create
+	createArgs := BuildCommand(spec)
+	cmd := exec.Command("pct", createArgs...)
 	out, err := cmd.CombinedOutput()
 	output := strings.TrimSpace(string(out))
 
@@ -71,20 +93,37 @@ func Provision(instanceRoot string, spec Spec, dryRun bool) Result {
 		if errMsg == "" {
 			errMsg = err.Error()
 		}
-		r := Result{Command: cmdStr, Error: fmt.Errorf("pct create failed: %s", errMsg)}
+		r := Result{Commands: cmds, Error: fmt.Errorf("pct create failed: %s", errMsg)}
 		writeProvisionState(instanceRoot, "", "error", errMsg)
 		return r
 	}
 
-	// Extract VMID from output (pct create prints nothing on success if VMID given,
-	// or prints the assigned VMID if 0 was used)
 	vmid := spec.VMID
 	if vmid == "" || vmid == "0" {
 		vmid = strings.TrimSpace(output)
 	}
 
+	// Install packages if any
+	if len(spec.Packages) > 0 {
+		for _, step := range [][]string{
+			{"start", vmid},
+			{"exec", vmid, "--", "apt-get", "update", "-qq"},
+			{"exec", vmid, "--", "apt-get", "install", "-y", "-qq"},
+		} {
+			if step[0] == "exec" && step[len(step)-1] == "-qq" {
+				step = append(step, spec.Packages...)
+			}
+			stepCmd := exec.Command("pct", step...)
+			if stepOut, err := stepCmd.CombinedOutput(); err != nil {
+				errMsg := strings.TrimSpace(string(stepOut))
+				writeProvisionState(instanceRoot, vmid, "error", "package install: "+errMsg)
+				return Result{VMID: vmid, Commands: cmds, Error: fmt.Errorf("package install failed: %s", errMsg)}
+			}
+		}
+	}
+
 	writeProvisionState(instanceRoot, vmid, "provisioned", "")
-	return Result{VMID: vmid, Command: cmdStr}
+	return Result{VMID: vmid, Commands: cmds}
 }
 
 func writeProvisionState(instanceRoot, vmid, status, errMsg string) {

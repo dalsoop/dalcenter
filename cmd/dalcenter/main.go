@@ -808,11 +808,14 @@ func provisionCmd() *cobra.Command {
 				Base:         plan.ContainerBase,
 				InstanceName: inst.DalID,
 				VMID:         vmid,
+				Packages:     plan.ContainerPackages,
 			}
 
 			r := provision.Provision(inst.InstanceRoot, spec, dryRun)
 			if dryRun {
-				fmt.Printf("dry-run: %s\n", r.Command)
+				for _, c := range r.Commands {
+					fmt.Printf("dry-run: %s\n", c)
+				}
 				return nil
 			}
 			if r.Error != nil {
