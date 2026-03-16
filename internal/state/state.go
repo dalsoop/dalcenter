@@ -8,13 +8,17 @@ import (
 )
 
 type HealthState struct {
-	Status       string `json:"status"`
-	HealthExit   int    `json:"health_exit"`
-	HealthOutput string `json:"health_output"`
-	CheckedAt    string `json:"checked_at"`
-	Pid          int    `json:"pid,omitempty"`
-	RunStatus    string `json:"run_status,omitempty"` // running, stopped, ""
-	StartedAt    string `json:"started_at,omitempty"`
+	Status          string `json:"status"`
+	HealthExit      int    `json:"health_exit"`
+	HealthOutput    string `json:"health_output"`
+	CheckedAt       string `json:"checked_at"`
+	Pid             int    `json:"pid,omitempty"`
+	RunStatus       string `json:"run_status,omitempty"`
+	StartedAt       string `json:"started_at,omitempty"`
+	VMID            string `json:"vmid,omitempty"`
+	ProvisionStatus string `json:"provision_status,omitempty"` // provisioned, error, ""
+	ProvisionedAt   string `json:"provisioned_at,omitempty"`
+	ProvisionError  string `json:"provision_error,omitempty"`
 }
 
 func Path(instanceRoot string) string {

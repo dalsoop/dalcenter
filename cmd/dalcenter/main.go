@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"dalforge-hub/dalcenter/internal/export"
+	"dalforge-hub/dalcenter/internal/provision"
 	"dalforge-hub/dalcenter/internal/registry"
 	"dalforge-hub/dalcenter/internal/runner"
 	"dalforge-hub/dalcenter/internal/state"
@@ -73,7 +74,7 @@ func main() {
 		Short: "DalForge local dal center CLI",
 	}
 
-	root.AddCommand(joinCmd(), listCmd(), statusCmd(), secretCmd(), validateCmd(), exportCmd(), unexportCmd(), startCmd(), stopCmd(), restartCmd(), reconcileCmd(), watchCmd())
+	root.AddCommand(joinCmd(), listCmd(), statusCmd(), secretCmd(), validateCmd(), exportCmd(), unexportCmd(), startCmd(), stopCmd(), restartCmd(), reconcileCmd(), watchCmd(), provisionCmd())
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -771,5 +772,57 @@ func watchCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().IntVar(&interval, "interval", 60, "reconcile interval in seconds")
+	return cmd
+}
+
+func provisionCmd() *cobra.Command {
+	var vmid string
+	var dryRun bool
+	cmd := &cobra.Command{
+		Use:   "provision <name>",
+		Short: "Provision a container for a localdal instance",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			reg, err := openRegistry()
+			if err != nil {
+				return err
+			}
+			defer reg.Close()
+			result, err := reg.Status(args[0])
+			if err != nil {
+				return err
+			}
+			inst := result.Instance
+			if inst.ManifestPath == "" {
+				return fmt.Errorf("instance %q has no manifest", args[0])
+			}
+			plan, err := export.LoadPlan(inst.ManifestPath)
+			if err != nil {
+				return err
+			}
+			if plan.ContainerBase == "" {
+				return fmt.Errorf("no container.base defined in manifest")
+			}
+
+			spec := provision.Spec{
+				Base:         plan.ContainerBase,
+				InstanceName: inst.DalID,
+				VMID:         vmid,
+			}
+
+			r := provision.Provision(inst.InstanceRoot, spec, dryRun)
+			if dryRun {
+				fmt.Printf("dry-run: %s\n", r.Command)
+				return nil
+			}
+			if r.Error != nil {
+				return r.Error
+			}
+			fmt.Printf("provisioned (vmid=%s)\n", r.VMID)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&vmid, "vmid", "", "explicit VMID (default: auto)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print command without executing")
 	return cmd
 }

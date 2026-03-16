@@ -21,6 +21,7 @@ type Plan struct {
 	HealthCheckCmd string
 	DefaultCmd     string   // build.entry from .dalfactory
 	AgentPackages  []string // container.agents[*].package values
+	ContainerBase  string   // container.base from .dalfactory
 }
 
 // SkillCount returns the number of declared exported skills across runtimes.
@@ -68,6 +69,14 @@ func LoadPlan(path string) (*Plan, error) {
 	}
 
 	for _, templateName := range templateNames(val) {
+		// Extract container.base
+		basePath := cue.ParsePath("templates." + quoteLabel(templateName) + ".container.base")
+		if baseVal := val.LookupPath(basePath); baseVal.Exists() {
+			if s, err := baseVal.String(); err == nil {
+				plan.ContainerBase = s
+			}
+		}
+
 		// Extract build.entry as default command
 		entryPath := cue.ParsePath("templates." + quoteLabel(templateName) + ".build.entry")
 		if entryVal := val.LookupPath(entryPath); entryVal.Exists() {
