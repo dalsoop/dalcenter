@@ -1,13 +1,13 @@
 # dalforge-hub
 
-`dalforge`는 허브다. 사용자 레포 안의 `.dalfactory`를 읽고, 그 선언으로 `localdal` 실행 인스턴스를 만들고 관리한다.
+`dalforge`는 클라우드 허브다. 패키지와 스펙을 유통하고, `dalcenter`는 사용자 레포의 `.dalfactory`를 읽어 등록하고 관리한다.
 
 ## 지금 되는 것
 
 `dalcenter`는 현재 `.dalfactory`를 실제 운영 흐름으로 연결한다.
 
 - `.dalfactory` validate
-- `join/list/status` 기반 localdal 등록 및 조회
+- `join/list/status` 기반 레포 등록 및 조회
 - Claude/Codex skill export, Claude hook export/settings 반영
 - `start/stop/restart` 로컬 프로세스 관리
 - `reconcile/watch` 기반 drift 점검
@@ -22,17 +22,17 @@
 - `bash`, `python3`, `tmux` 설치 확인
 - `destroy` 후 컨테이너 제거 확인
 
-즉 지금은 “설계 문서만 있는 상태”가 아니라, 파생 레포의 `.dalfactory`에서 localdal과 LXC까지 이어지는 초기 운영 버전이다.
+즉 지금은 “설계 문서만 있는 상태”가 아니라, 파생 레포의 `.dalfactory`에서 로컬 실행과 LXC 운영까지 이어지는 초기 운영 버전이다.
 
 ## 한 줄 구조
 
-- `dalforge`: 허브 레포. `dalcenter`, `dal`, 스펙, 문서, 운영 도구가 있다.
+- `dalforge`: 클라우드 허브. 패키지와 스펙을 유통한다.
+- `dalcenter`: 등록/관리 주체. `.dalfactory`를 읽고 상태를 관리한다.
 - 사용자 레포: 실제 프로젝트 레포. 여기에 `.dalfactory/`가 있다.
-- `localdal`: 그 사용자 레포의 `.dalfactory`를 읽고 로컬에 만들어진 실행 인스턴스다.
 
 한 줄로 줄이면:
 
-`dalforge`는 읽고 관리한다. `.dalfactory`는 사용자 레포에 있다. `localdal`은 실행된다.
+`dalforge`는 배포한다. `dalcenter`는 관리한다. `.dalfactory`는 사용자 레포에 있다.
 
 ## 구조
 
@@ -55,23 +55,27 @@ dalforge-hub/
 
 dal은 AI 에이전트 인스턴스다. 컨테이너 안에 claude, codex, gemini 등이 이미 설치되고 로그인된 상태로 존재한다. 하나의 dal은 하나의 작업 환경이다.
 
-### dalforge / dalcenter (허브)
+### dalforge (클라우드 허브)
 
-`dalforge`는 허브이고, `dalcenter`는 그 허브의 중앙 레지스트리다.
+`dalforge`는 npm registry 같은 상위 유통/배포 허브다.
+
+- 패키지 배포
+- 스펙/문서 유통
+- 버전 카탈로그
+
+### dalcenter (등록 주체)
+
+`dalcenter`는 `.dalfactory`를 읽고 등록하고 상태를 관리하는 주체다.
 
 - 패키지(CLI/스킬/훅) 등록 및 버전 관리
-- localdal 인스턴스 생성 및 상태 추적
+- 인스턴스 생성 및 상태 추적
 - 시크릿(API 키 등) 암호화 저장 및 배포
 - 노드별 설치 현황(인벤토리) 관리
 - 감사 이벤트 기록
 
-### localdal (실행 인스턴스)
-
-실제로 생성된 dal 하나다. 사용자 레포의 `.dalfactory`를 기반으로 로컬에 만들어진 실행 인스턴스다. 안에는 CLI 도구, 스킬, 훅, 시크릿이 담겨 있고, 하나 이상의 PLAYER(에이전트)가 작업한다.
-
 ### .dalfactory (레포 선언)
 
-사용자 레포 루트에 위치하는 폴더다. `dalforge` 허브 레포가 아니라, 실제 프로젝트 레포 안에 들어간다. 이 폴더가 localdal을 만들기 위한 설계도다.
+사용자 레포 루트에 위치하는 폴더다. `dalforge` 클라우드 허브 레포가 아니라, 실제 프로젝트 레포 안에 들어간다. 이 폴더가 실행, export, container, agents를 선언하는 SSOT다.
 
 ```
 my-project/
@@ -88,7 +92,7 @@ my-project/
 
 ### PLAYER (에이전트)
 
-localdal 안에서 실제로 일하는 주체. 하나의 dal에 여러 PLAYER가 있을 수 있다. 각 PLAYER는 서로 다른 에이전트(claude, codex, gemini)일 수 있고, 서로 다른 도구 세트를 가진다.
+실행 환경 안에서 실제로 일하는 주체다. 하나의 dal에 여러 PLAYER가 있을 수 있다. 각 PLAYER는 서로 다른 에이전트(claude, codex, gemini)일 수 있고, 서로 다른 도구 세트를 가진다.
 
 ## ID 체계
 
@@ -121,7 +125,7 @@ DAL:CONTAINER:a1b2c3d4    my-project container
 
 .dalfactory/templates/claude-dev.cue 에 인형 틀을 정의한다. 컨테이너 base image, 설치할 패키지, 에이전트, CLI 도구, 스킬, 필요한 시크릿을 선언한다.
 
-### 2. localdal 등록
+### 2. 레포 등록
 
 ```bash
 dalcenter join /path/to/repo
@@ -132,7 +136,7 @@ dalcenter join /path/to/repo
 1. 사용자 레포의 `.dalfactory/dal.cue` 읽기
 2. manifest validate
 3. skill/hook export
-4. localdal instance dir 생성
+4. 로컬 instance dir 생성
 5. registry + state 기록
 
 ```bash
@@ -171,7 +175,7 @@ dalcenter secret list
 
 ### 5. 동기화
 
-dalcenter와 localdal은 주기적으로 상태를 동기화한다.
+dalcenter는 등록된 레포와 런타임 상태를 주기적으로 동기화한다.
 
 - 패키지 버전 업데이트 감지
 - 설치 현황 보고
@@ -192,7 +196,7 @@ dalcenter watch --interval 60
 dalcenter validate /root/dalforge-hub/dalcli/dalcli-agent-coach
 ```
 
-### 2. localdal 등록
+### 2. 레포 등록
 
 ```bash
 dalcenter join /root/dalforge-hub/dalcli/dalcli-agent-coach
