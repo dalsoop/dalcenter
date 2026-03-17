@@ -4,6 +4,8 @@
 
 `dalforge`는 `.dalfactory` 선언을 실제 로컬 실행과 LXC 운영으로 바꾸는 self-hosted orchestration stack입니다.
 
+공식 도메인: `https://dalforge.com`
+
 핵심 구조는 이렇습니다.
 
 - `dalforge`

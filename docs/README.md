@@ -2,6 +2,8 @@
 
 이 디렉터리는 `dalforge`와 `dalcenter`를 실제로 운영할 때 필요한 문서의 입구다.
 
+Canonical home: `https://dalforge.com`
+
 ## Start Here
 
 - [`../README.md`](../README.md)

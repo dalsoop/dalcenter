@@ -4,6 +4,8 @@
 
 Korean summary: [`README.ko.md`](./README.ko.md)
 
+Canonical domain: `https://dalforge.com`
+
 ## What It Is
 
 가장 짧게 말하면:
