@@ -2,6 +2,28 @@
 
 dal은 AI 에이전트가 빙의된 사용자의 말이다. dalforge-hub는 이 dal을 만들고, 관리하고, 실행하는 대장간이다.
 
+## 지금 되는 것
+
+`dalcenter`는 현재 `.dalfactory`를 실제 운영 흐름으로 연결한다.
+
+- `.dalfactory` validate
+- `join/list/status` 기반 localdal 등록 및 조회
+- Claude/Codex skill export, Claude hook export/settings 반영
+- `start/stop/restart` 로컬 프로세스 관리
+- `reconcile/watch` 기반 drift 점검
+- Proxmox LXC `provision/destroy`
+- `container.packages` 설치
+- `container.agents` 설치 명령 실행
+- `dal summon/dismiss`와 export/unexport/destroy soft 연동
+
+실제 Proxmox 라이브 검증도 끝났다.
+
+- Ubuntu 24.04 LXC 생성
+- `bash`, `python3`, `tmux` 설치 확인
+- `destroy` 후 컨테이너 제거 확인
+
+즉 지금은 “설계 문서만 있는 상태”가 아니라, `.dalfactory`에서 localdal과 LXC까지 이어지는 초기 운영 버전이다.
+
 ## 구조
 
 ```
@@ -89,24 +111,23 @@ DAL:CONTAINER:a1b2c3d4    my-project container
 
 .dalfactory/templates/claude-dev.cue 에 인형 틀을 정의한다. 컨테이너 base image, 설치할 패키지, 에이전트, CLI 도구, 스킬, 필요한 시크릿을 선언한다.
 
-### 2. 인스턴스 생성
+### 2. localdal 등록
 
 ```bash
-dalcenter join claude-dev
+dalcenter join /path/to/repo
 ```
 
-1. .dalfactory/templates/claude-dev.cue 읽음
-2. 컨테이너 생성 (base image + packages + agents 설치)
-3. SecretVault 초기화 (API 키 암호화 저장)
-4. CLI/스킬/훅 설치
-5. PLAYER(에이전트) 시작
+현재 `join`은 아래를 수행한다.
 
-같은 템플릿으로 여러 인스턴스 생성 가능:
+1. `.dalfactory/dal.cue` 읽기
+2. manifest validate
+3. skill/hook export
+4. localdal instance dir 생성
+5. registry + state 기록
 
 ```bash
-dalcenter join claude-dev --name "feature-a"
-dalcenter join claude-dev --name "feature-b"
-dalcenter join codex-worker --name "background-task"
+dalcenter list
+dalcenter status <name-or-id>
 ```
 
 ### 3. 빌드 및 Export
@@ -117,16 +138,16 @@ dalcenter join codex-worker --name "background-task"
 
 ```
 .dalfactory/ (소스)
-    -> build
-.claude/     (claude용 export)
+    -> export
+.claude/
     skills/
     hooks/
-.codex/      (codex용 export)
+    settings.json
+.codex/
     skills/
-    hooks/
 ```
 
-watch가 .dalfactory/ 변경을 감지하면 자동으로 빌드 -> export -> 반영.
+현재 hook settings 반영은 Claude만 지원한다. Codex는 skills export까지만 지원한다.
 
 ### 4. 시크릿 관리
 
@@ -145,6 +166,83 @@ dalcenter와 localdal은 주기적으로 상태를 동기화한다.
 - 패키지 버전 업데이트 감지
 - 설치 현황 보고
 - 오프라인 시 캐시 모드로 동작
+
+지금 실제 명령은 아래가 중심이다.
+
+```bash
+dalcenter reconcile
+dalcenter watch --interval 60
+```
+
+## 실제 사용 예시
+
+### 1. manifest 검증
+
+```bash
+dalcenter validate /root/dalforge-hub/dalcli/dalcli-agent-coach
+```
+
+### 2. localdal 등록
+
+```bash
+dalcenter join /root/dalforge-hub/dalcli/dalcli-agent-coach
+dalcenter list
+dalcenter status dalcli-agent-coach
+```
+
+### 3. 로컬 실행 관리
+
+`build.entry`가 있으면 `--command` 없이도 실행된다.
+
+```bash
+dalcenter start dalcli-agent-coach
+dalcenter status dalcli-agent-coach
+dalcenter stop dalcli-agent-coach
+```
+
+### 4. Proxmox LXC 생성
+
+```bash
+dalcenter provision dalcli-agent-coach \
+  --vmid 219318 \
+  --storage local-lvm \
+  --bridge vmbr0 \
+  --memory 512 \
+  --cores 1
+```
+
+지원 플래그:
+
+- `--vmid`
+- `--storage`
+- `--bridge`
+- `--memory`
+- `--cores`
+- `--dry-run`
+
+### 5. Proxmox LXC 제거
+
+```bash
+dalcenter destroy dalcli-agent-coach
+```
+
+### 6. dal과 연동
+
+```bash
+dal summon agent-coach
+dal dismiss agent-coach
+```
+
+`dal summon`은 soft dependency로 export를 호출하고, `dal dismiss`는 unexport와 destroy를 soft dependency로 호출한다.
+
+## 현재 한계
+
+지금도 실사용은 가능하지만, 아래는 아직 확장 여지가 있다.
+
+- 고급 네트워크/스토리지 정책
+- disk size 같은 추가 운영 플래그
+- hook 운영 예시 manifest
+- Proxmox 대규모 운영용 정책/감사 정교화
 
 ## 스펙
 
