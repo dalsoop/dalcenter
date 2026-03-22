@@ -2,6 +2,7 @@ package talk
 
 import (
 	"bytes"
+	"encoding/json"
 	"context"
 	"fmt"
 	"os"
@@ -48,7 +49,7 @@ func (e *Executor) Run(ctx context.Context, mode Mode, message string) (string, 
 	case ModeAsk:
 		args = []string{"--print", prompt}
 	case ModeExec:
-		args = []string{"-p", prompt, "--allowedTools", "Bash,Read,Write,Edit"}
+		args = []string{"-p", prompt, "--allowedTools", "Bash,Read,Write,Edit", "--output-format", "stream-json", "--verbose"}
 	default:
 		return "", fmt.Errorf("unknown mode: %s", mode)
 	}
@@ -70,7 +71,32 @@ func (e *Executor) Run(ctx context.Context, mode Mode, message string) (string, 
 		return "", fmt.Errorf("claude %s failed: %s", mode, errMsg)
 	}
 
+	if mode == ModeExec {
+		return extractResult(stdout.String()), nil
+	}
 	return strings.TrimSpace(stdout.String()), nil
+}
+
+// extractResult parses stream-json output and returns the final result text.
+func extractResult(output string) string {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		var msg struct {
+			Type   string `json:"type"`
+			Result string `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(line), &msg); err != nil {
+			continue
+		}
+		if msg.Type == "result" && msg.Result != "" {
+			return msg.Result
+		}
+	}
+	return strings.TrimSpace(output)
 }
 
 // Sanitizer redacts sensitive content from dal output.
