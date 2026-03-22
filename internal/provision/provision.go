@@ -10,6 +10,8 @@ import (
 	"dalforge-hub/dalcenter/internal/state"
 )
 
+const phsBinary = "proxmox-host-setup"
+
 // Spec describes what to provision.
 type Spec struct {
 	Base         string             // e.g. "ubuntu:24.04"
@@ -133,7 +135,7 @@ func BuildAllCommands(spec Spec) []string {
 
 	// Credential sync step
 	for _, filter := range agentFilters(spec.Agents) {
-		cmds = append(cmds, fmt.Sprintf("proxmox-host-setup ai mount --vmid %s --agent %s", vmid, filter))
+		cmds = append(cmds, fmt.Sprintf("%s ai mount --vmid %s --agent %s", phsBinary, vmid, filter))
 	}
 
 	return cmds
@@ -246,10 +248,9 @@ func Provision(instanceRoot string, spec Spec, dryRun bool) Result {
 	}
 
 	// Sync AI agent credentials from host into container
-	if syncErr := syncAgentCredentials(vmid, spec.Agents); syncErr != nil {
-		agentStatuses["credential_sync"] = "error: " + syncErr.Error()
-	} else if len(spec.Agents) > 0 {
-		agentStatuses["credential_sync"] = "synced"
+	syncStatus := syncAgentCredentials(vmid, spec.Agents)
+	if syncStatus != "" {
+		agentStatuses["credential_sync"] = syncStatus
 	}
 
 	writeProvisionState(instanceRoot, vmid, "provisioned", "", "")
@@ -264,16 +265,17 @@ func Provision(instanceRoot string, spec Spec, dryRun bool) Result {
 }
 
 // syncAgentCredentials calls proxmox-host-setup to copy host credentials into the container.
-func syncAgentCredentials(vmid string, agents []export.AgentSpec) error {
-	phs, err := exec.LookPath("proxmox-host-setup")
-	if err != nil {
-		fmt.Println("[provision] proxmox-host-setup not found, skipping credential sync")
-		return fmt.Errorf("proxmox-host-setup not found")
-	}
-
+// Returns a status string for agentStatuses: "synced", "skipped", "error: ...", or "" (no agents).
+func syncAgentCredentials(vmid string, agents []export.AgentSpec) string {
 	filters := agentFilters(agents)
 	if len(filters) == 0 {
-		return nil
+		return ""
+	}
+
+	phs, err := exec.LookPath(phsBinary)
+	if err != nil {
+		fmt.Printf("[provision] %s not found, skipping credential sync\n", phsBinary)
+		return "skipped: " + phsBinary + " not found"
 	}
 
 	var errs []string
@@ -291,9 +293,9 @@ func syncAgentCredentials(vmid string, agents []export.AgentSpec) error {
 	}
 
 	if len(errs) > 0 {
-		return fmt.Errorf("%s", strings.Join(errs, "; "))
+		return "error: " + strings.Join(errs, "; ")
 	}
-	return nil
+	return "synced"
 }
 
 // agentFilters maps dalforge agent types to proxmox-host-setup agent filter values.
