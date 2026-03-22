@@ -13,6 +13,11 @@ setup_file() {
     rm -rf ~/.dalcenter 2>/dev/null || true
 }
 
+teardown_file() {
+    # 테스트 후 남은 프로세스 정리
+    $DALCENTER stop agent-coach 2>/dev/null || true
+}
+
 # --- CLI 기본 ---
 
 @test "help 출력" {
@@ -40,6 +45,12 @@ setup_file() {
     run $DALCENTER catalog search agent-coach
     [ "$status" -eq 0 ]
     [[ "$output" == *"agent-coach"* ]]
+}
+
+# --- 전제조건 ---
+
+@test "dal.spec.cue 존재" {
+    [ -f /root/dalforge-dalcenter/dal.spec.cue ] || skip "dal.spec.cue 없음 — join 테스트 실패 예상"
 }
 
 # --- JOIN / LIST / STATUS ---
