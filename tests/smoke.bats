@@ -2,8 +2,16 @@
 # dalcenter smoke tests
 # 실행: bats tests/smoke.bats
 # LXC 안에서: dalcenter 바이너리가 PATH에 있어야 함
+# 네트워크 필요: catalog search가 dalforge 클라우드에 접속
 
 DALCENTER="${DALCENTER:-dalcenter}"
+
+setup_file() {
+    # 기존 상태 전체 정리 (멱등한 테스트를 위해)
+    $DALCENTER stop agent-coach 2>/dev/null || true
+    $DALCENTER destroy agent-coach 2>/dev/null || true
+    rm -rf ~/.dalcenter 2>/dev/null || true
+}
 
 # --- CLI 기본 ---
 
