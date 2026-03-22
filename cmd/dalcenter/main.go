@@ -989,7 +989,7 @@ func talkCmd() *cobra.Command {
 		Use:   "talk",
 		Short: "Agent communication (daemon, bot management)",
 	}
-	cmd.AddCommand(talkRunCmd(), talkSetupCmd(), talkTeardownCmd())
+	cmd.AddCommand(talkRunCmd(), talkConductorCmd(), talkSetupCmd(), talkTeardownCmd())
 	return cmd
 }
 
@@ -1059,6 +1059,67 @@ func talkRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&agentName, "agent-name", "", "agent name for registration")
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 10, "max response turns")
 	cmd.Flags().DurationVar(&cooldown, "cooldown", 3*time.Second, "cooldown between responses")
+	return cmd
+}
+
+func talkConductorCmd() *cobra.Command {
+	var (
+		url        string
+		botToken   string
+		channelID  string
+		botUsername string
+		agents     []string // "username:role" pairs
+	)
+	cmd := &cobra.Command{
+		Use:   "conductor",
+		Short: "Run central orchestrator bot that routes messages to agents",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var agentInfos []talk.AgentInfo
+			for _, a := range agents {
+				parts := strings.SplitN(a, ":", 2)
+				if len(parts) != 2 {
+					return fmt.Errorf("agent format must be 'username:role', got %q", a)
+				}
+				agentInfos = append(agentInfos, talk.AgentInfo{
+					Username: parts[0],
+					Role:     parts[1],
+				})
+			}
+
+			cfg := talk.ConductorConfig{
+				URL:        url,
+				BotToken:   botToken,
+				ChannelID:  channelID,
+				BotUsername: botUsername,
+				Agents:     agentInfos,
+			}
+
+			c, err := talk.NewConductor(cfg)
+			if err != nil {
+				return err
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+			go func() {
+				<-sigCh
+				cancel()
+			}()
+
+			return c.Run(ctx)
+		},
+	}
+	cmd.Flags().StringVar(&url, "url", "", "Mattermost server URL")
+	cmd.Flags().StringVar(&botToken, "bot-token", "", "conductor bot token")
+	cmd.Flags().StringVar(&channelID, "channel-id", "", "target channel ID")
+	cmd.Flags().StringVar(&botUsername, "bot-username", "keycenter", "conductor bot username")
+	cmd.Flags().StringSliceVar(&agents, "agent", nil, "agent in 'username:role' format (repeatable)")
+	cmd.MarkFlagRequired("url")
+	cmd.MarkFlagRequired("bot-token")
+	cmd.MarkFlagRequired("channel-id")
 	return cmd
 }
 
