@@ -396,22 +396,24 @@ func TestBuildAllCommandsAgentsOnlyNoPackages(t *testing.T) {
 	}
 }
 
-func TestAgentFilters(t *testing.T) {
+func TestCredentialFilters(t *testing.T) {
 	cases := []struct {
 		name    string
 		agents  []export.AgentSpec
+		exports []string
 		expect  []string
 	}{
-		{"empty", nil, nil},
-		{"claude only", []export.AgentSpec{{Type: "claude_sdk"}}, []string{"claude"}},
-		{"codex only", []export.AgentSpec{{Type: "codex_appserver"}}, []string{"codex"}},
-		{"claude+codex", []export.AgentSpec{{Type: "claude_sdk"}, {Type: "codex_appserver"}}, []string{"claude", "codex"}},
-		{"unknown type ignored", []export.AgentSpec{{Type: "openai_compatible"}}, nil},
-		{"dedup", []export.AgentSpec{{Type: "claude_sdk"}, {Type: "claude_sdk"}}, []string{"claude"}},
+		{"empty", nil, nil, nil},
+		{"agent only", []export.AgentSpec{{Type: "claude_sdk"}}, nil, []string{"claude"}},
+		{"export only", nil, []string{"claude", "codex"}, []string{"claude", "codex"}},
+		{"agent+export dedup", []export.AgentSpec{{Type: "claude_sdk"}}, []string{"claude"}, []string{"claude"}},
+		{"export adds missing", []export.AgentSpec{{Type: "claude_sdk"}}, []string{"codex"}, []string{"claude", "codex"}},
+		{"unknown type ignored", []export.AgentSpec{{Type: "openai_compatible"}}, nil, nil},
+		{"unknown export ignored", nil, []string{"unknown"}, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := agentFilters(tc.agents)
+			got := credentialFilters(tc.agents, tc.exports)
 			if len(got) != len(tc.expect) {
 				t.Fatalf("expected %v, got %v", tc.expect, got)
 			}

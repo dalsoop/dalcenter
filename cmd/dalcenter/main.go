@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -910,12 +912,16 @@ func provisionCmd() *cobra.Command {
 				return fmt.Errorf("no container.base defined in manifest")
 			}
 
+			// Collect export runtimes for credential sync (sorted for deterministic output)
+			exportRuntimes := slices.Sorted(maps.Keys(plan.Exports))
+
 			spec := provision.Spec{
 				Base:         plan.ContainerBase,
 				InstanceName: inst.DalID,
 				VMID:         vmid,
 				Packages:     plan.ContainerPackages,
 				Agents:       plan.Agents,
+				Exports:      exportRuntimes,
 				Storage:      storage,
 				Bridge:       bridge,
 				Memory:       memory,

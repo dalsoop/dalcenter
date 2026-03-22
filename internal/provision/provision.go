@@ -19,6 +19,7 @@ type Spec struct {
 	VMID         string             // if empty, auto-assigned by pct
 	Packages     []string           // apt packages to install after create
 	Agents       []export.AgentSpec // agents to install after packages
+	Exports      []string           // runtimes that have exported skills (e.g. "claude", "codex")
 	Storage      string             // --storage (default: local-lvm)
 	Bridge       string             // --bridge network bridge (default: vmbr0)
 	Memory       string             // --memory in MB (default: 512)
@@ -134,7 +135,7 @@ func BuildAllCommands(spec Spec) []string {
 	}
 
 	// Credential sync step
-	for _, filter := range agentFilters(spec.Agents) {
+	for _, filter := range credentialFilters(spec.Agents, spec.Exports) {
 		cmds = append(cmds, fmt.Sprintf("%s ai mount --vmid %s --agent %s", phsBinary, vmid, filter))
 	}
 
@@ -248,7 +249,7 @@ func Provision(instanceRoot string, spec Spec, dryRun bool) Result {
 	}
 
 	// Sync AI agent credentials from host into container
-	syncStatus := syncAgentCredentials(vmid, spec.Agents)
+	syncStatus := syncAgentCredentials(vmid, spec.Agents, spec.Exports)
 	if syncStatus != "" {
 		agentStatuses["credential_sync"] = syncStatus
 	}
@@ -266,8 +267,8 @@ func Provision(instanceRoot string, spec Spec, dryRun bool) Result {
 
 // syncAgentCredentials calls proxmox-host-setup to copy host credentials into the container.
 // Returns a status string for agentStatuses: "synced", "skipped", "error: ...", or "" (no agents).
-func syncAgentCredentials(vmid string, agents []export.AgentSpec) string {
-	filters := agentFilters(agents)
+func syncAgentCredentials(vmid string, agents []export.AgentSpec, exports []string) string {
+	filters := credentialFilters(agents, exports)
 	if len(filters) == 0 {
 		return ""
 	}
@@ -298,25 +299,37 @@ func syncAgentCredentials(vmid string, agents []export.AgentSpec) string {
 	return "synced"
 }
 
-// agentFilters maps dalforge agent types to proxmox-host-setup agent filter values.
-func agentFilters(agents []export.AgentSpec) []string {
+// credentialFilters determines which agents need credential sync,
+// based on both installed agents and exported skill runtimes.
+func credentialFilters(agents []export.AgentSpec, exports []string) []string {
 	seen := map[string]bool{}
 	var filters []string
-	for _, a := range agents {
-		var name string
-		switch a.Type {
-		case "claude_sdk":
-			name = "claude"
-		case "codex_appserver":
-			name = "codex"
-		case "gemini_cli":
-			name = "gemini"
-		}
+
+	add := func(name string) {
 		if name != "" && !seen[name] {
 			seen[name] = true
 			filters = append(filters, name)
 		}
 	}
+
+	for _, a := range agents {
+		switch a.Type {
+		case "claude_sdk":
+			add("claude")
+		case "codex_appserver":
+			add("codex")
+		case "gemini_cli":
+			add("gemini")
+		}
+	}
+
+	for _, rt := range exports {
+		switch rt {
+		case "claude", "codex", "gemini":
+			add(rt)
+		}
+	}
+
 	return filters
 }
 
