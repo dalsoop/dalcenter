@@ -997,7 +997,7 @@ func talkCmd() *cobra.Command {
 		Use:   "talk",
 		Short: "Dal communication (daemon, bot management)",
 	}
-	cmd.AddCommand(talkRunCmd(), talkConductorCmd(), talkSetupCmd(), talkTeardownCmd())
+	cmd.AddCommand(talkRunCmd(), talkConductorCmd(), talkSetupCmd(), talkTeardownCmd(), talkFactoryCmd())
 	return cmd
 }
 
@@ -1284,5 +1284,34 @@ func tuiCmd() *cobra.Command {
 	cmd.Flags().StringVar(&mmURL, "mm-url", "", "Mattermost server URL")
 	cmd.Flags().StringVar(&mmToken, "mm-token", "", "Mattermost bot token for reading")
 	cmd.Flags().StringVar(&channelID, "channel-id", "", "Mattermost channel ID")
+	return cmd
+}
+
+func talkFactoryCmd() *cobra.Command {
+	var (
+		dalfactory string
+		url        string
+		login      string
+		password   string
+		team       string
+	)
+	cmd := &cobra.Command{
+		Use:   "factory",
+		Short: "Setup all bots and channels from .dalfactory",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if dalfactory == "" {
+				dalfactory = ".dalfactory"
+			}
+			return talk.SetupFromFactory(dalfactory, url, login, password, team)
+		},
+	}
+	cmd.Flags().StringVar(&dalfactory, "dalfactory", ".dalfactory", "path to .dalfactory directory")
+	cmd.Flags().StringVar(&url, "url", "", "Mattermost server URL")
+	cmd.Flags().StringVar(&login, "login", "", "admin login (email)")
+	cmd.Flags().StringVar(&password, "password", "", "admin password")
+	cmd.Flags().StringVar(&team, "team", "", "team name (empty = first)")
+	cmd.MarkFlagRequired("url")
+	cmd.MarkFlagRequired("login")
+	cmd.MarkFlagRequired("password")
 	return cmd
 }
