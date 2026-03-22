@@ -135,6 +135,7 @@ func GetAdminToken(mmURL, loginID, password string) (string, error) {
 }
 
 // GetTeamAndChannel resolves team ID and channel ID by name.
+// If the channel doesn't exist, it creates one.
 func GetTeamAndChannel(mmURL, token, teamName, channelName string) (teamID, channelID string, err error) {
 	mmURL = strings.TrimRight(mmURL, "/")
 
@@ -160,17 +161,72 @@ func GetTeamAndChannel(mmURL, token, teamName, channelName string) (teamID, chan
 		return "", "", fmt.Errorf("team %q not found", teamName)
 	}
 
-	// Get channel
+	// Try to get existing channel
 	chResp, err := mmAPI("GET", mmURL+"/api/v4/teams/"+teamID+"/channels/name/"+channelName, token, "")
-	if err != nil {
-		return teamID, "", fmt.Errorf("channel %q not found: %w", channelName, err)
-	}
-	channelID = jsonStr(chResp, "id")
-	if channelID == "" {
-		return teamID, "", fmt.Errorf("channel %q: no id", channelName)
+	if err == nil {
+		channelID = jsonStr(chResp, "id")
+		if channelID != "" {
+			return teamID, channelID, nil
+		}
 	}
 
+	// Channel not found — create it
+	channelID, err = CreateChannel(mmURL, token, teamID, channelName)
+	if err != nil {
+		return teamID, "", err
+	}
 	return teamID, channelID, nil
+}
+
+// CreateChannel creates a public Mattermost channel, or restores it if archived.
+func CreateChannel(mmURL, token, teamID, channelName string) (string, error) {
+	mmURL = strings.TrimRight(mmURL, "/")
+
+	// Try create
+	body := fmt.Sprintf(`{"team_id":%q,"name":%q,"display_name":%q,"type":"O","purpose":"dalforge talk channel"}`,
+		teamID, channelName, channelName)
+	resp, err := mmAPI("POST", mmURL+"/api/v4/channels", token, body)
+	if err == nil {
+		id := jsonStr(resp, "id")
+		if id != "" {
+			return id, nil
+		}
+	}
+
+	// If exists (possibly archived), search and restore
+	searchBody := fmt.Sprintf(`{"term":%q,"include_deleted":true}`, channelName)
+	searchResp, err := mmAPI("POST", mmURL+"/api/v4/channels/search", token, searchBody)
+	if err != nil {
+		return "", fmt.Errorf("search channel %q: %w", channelName, err)
+	}
+	var channels []struct {
+		ID       string `json:"id"`
+		Name     string `json:"name"`
+		DeleteAt int64  `json:"delete_at"`
+	}
+	if err := json.Unmarshal(searchResp, &channels); err != nil {
+		return "", fmt.Errorf("parse search: %w", err)
+	}
+	for _, ch := range channels {
+		if ch.Name == channelName {
+			if ch.DeleteAt > 0 {
+				// Restore archived channel
+				_, err := mmAPI("POST", mmURL+"/api/v4/channels/"+ch.ID+"/restore", token, "")
+				if err != nil {
+					return "", fmt.Errorf("restore channel %q: %w", channelName, err)
+				}
+			}
+			return ch.ID, nil
+		}
+	}
+	return "", fmt.Errorf("channel %q: create and search both failed", channelName)
+}
+
+// DeleteChannel archives a Mattermost channel.
+func DeleteChannel(mmURL, token, channelID string) error {
+	mmURL = strings.TrimRight(mmURL, "/")
+	_, err := mmAPI("DELETE", mmURL+"/api/v4/channels/"+channelID, token, "")
+	return err
 }
 
 func mmAPI(method, url, token, body string) ([]byte, error) {

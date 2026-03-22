@@ -3,6 +3,7 @@ package talk
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -135,6 +136,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 			}(msg)
 
 		case err := <-d.br.Errors():
+			if errors.Is(err, bridge.ErrAuthFailed) {
+				log.Printf("[talk] fatal: %v — shutting down", err)
+				return err
+			}
 			log.Printf("[talk] bridge error: %v", err)
 
 		case <-ctx.Done():

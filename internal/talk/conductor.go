@@ -2,6 +2,7 @@ package talk
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -93,6 +94,10 @@ func (c *Conductor) Run(ctx context.Context) error {
 			}
 
 		case err := <-c.br.Errors():
+			if errors.Is(err, bridge.ErrAuthFailed) {
+				log.Printf("[conductor] fatal: %v — shutting down", err)
+				return err
+			}
 			log.Printf("[conductor] bridge error: %v", err)
 
 		case <-ctx.Done():

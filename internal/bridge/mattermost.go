@@ -2,13 +2,19 @@ package bridge
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 )
+
+// ErrAuthFailed is returned when the bot token is invalid or expired.
+// This is non-retryable — the caller should stop, not retry.
+var ErrAuthFailed = errors.New("auth failed (token invalid or expired)")
 
 // MattermostBridge implements Bridge using Mattermost REST API polling.
 type MattermostBridge struct {
@@ -71,6 +77,7 @@ func (m *MattermostBridge) Close() error {
 }
 
 func (m *MattermostBridge) poll() {
+	consecutiveErrors := 0
 	for {
 		select {
 		case <-m.done:
@@ -80,17 +87,41 @@ func (m *MattermostBridge) poll() {
 
 		posts, err := m.fetchNewPosts()
 		if err != nil {
+			// Non-retryable: auth failure → stop polling
+			if errors.Is(err, ErrAuthFailed) {
+				log.Printf("[bridge] fatal: %v — stopping poll", err)
+				select {
+				case m.errors <- err:
+				default:
+				}
+				return
+			}
+
+			consecutiveErrors++
 			select {
 			case m.errors <- err:
 			default:
 			}
-		} else {
-			for _, p := range posts {
-				select {
-				case m.messages <- p:
-				case <-m.done:
-					return
-				}
+
+			// Exponential backoff on consecutive errors (max 60s)
+			backoff := time.Duration(1<<uint(min(consecutiveErrors, 6))) * time.Second
+			if backoff > 60*time.Second {
+				backoff = 60 * time.Second
+			}
+			select {
+			case <-time.After(backoff):
+			case <-m.done:
+				return
+			}
+			continue
+		}
+
+		consecutiveErrors = 0
+		for _, p := range posts {
+			select {
+			case m.messages <- p:
+			case <-m.done:
+				return
 			}
 		}
 
@@ -158,6 +189,9 @@ func (m *MattermostBridge) apiGet(path string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == 401 || resp.StatusCode == 403 {
+		return nil, fmt.Errorf("%w: %s", ErrAuthFailed, string(body))
+	}
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("MM API %s: %d %s", path, resp.StatusCode, string(body))
 	}
@@ -174,6 +208,9 @@ func (m *MattermostBridge) apiPost(path, jsonBody string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == 401 || resp.StatusCode == 403 {
+		return nil, fmt.Errorf("%w: %s", ErrAuthFailed, string(body))
+	}
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("MM API %s: %d %s", path, resp.StatusCode, string(body))
 	}
