@@ -910,12 +910,19 @@ func provisionCmd() *cobra.Command {
 				return fmt.Errorf("no container.base defined in manifest")
 			}
 
+			// Collect export runtimes for credential sync
+			var exportRuntimes []string
+			for rt := range plan.Exports {
+				exportRuntimes = append(exportRuntimes, rt)
+			}
+
 			spec := provision.Spec{
 				Base:         plan.ContainerBase,
 				InstanceName: inst.DalID,
 				VMID:         vmid,
 				Packages:     plan.ContainerPackages,
 				Agents:       plan.Agents,
+				Exports:      exportRuntimes,
 				Storage:      storage,
 				Bridge:       bridge,
 				Memory:       memory,
