@@ -18,7 +18,9 @@ import (
 	"dalforge-hub/dalcenter/internal/provision"
 	"dalforge-hub/dalcenter/internal/registry"
 	"dalforge-hub/dalcenter/internal/runner"
+	"dalforge-hub/dalcenter/internal/serve"
 	"dalforge-hub/dalcenter/internal/state"
+	"dalforge-hub/dalcenter/internal/talk"
 	"dalforge-hub/dalcenter/internal/validate"
 	"dalforge-hub/dalcenter/internal/vault"
 
@@ -75,7 +77,7 @@ func main() {
 		Short: "DalForge local dal center CLI",
 	}
 
-	root.AddCommand(joinCmd(), listCmd(), statusCmd(), secretCmd(), validateCmd(), exportCmd(), unexportCmd(), startCmd(), stopCmd(), restartCmd(), reconcileCmd(), watchCmd(), provisionCmd(), destroyCmd(), catalogCmd())
+	root.AddCommand(joinCmd(), listCmd(), statusCmd(), secretCmd(), validateCmd(), exportCmd(), unexportCmd(), startCmd(), stopCmd(), restartCmd(), reconcileCmd(), watchCmd(), provisionCmd(), destroyCmd(), catalogCmd(), talkCmd(), serveCmd())
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -979,5 +981,92 @@ func destroyCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print commands without executing")
+	return cmd
+}
+
+func talkCmd() *cobra.Command {
+	var (
+		bridgeType string
+		url        string
+		botToken   string
+		channelID  string
+		role       string
+		hookPort   int
+		serveURL   string
+		agentName  string
+		maxTurns   int
+		cooldown   time.Duration
+	)
+	cmd := &cobra.Command{
+		Use:   "talk",
+		Short: "Run agent communication daemon (MM bridge + hook server)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := talk.Config{
+				BridgeType: bridgeType,
+				URL:        url,
+				BotToken:   botToken,
+				ChannelID:  channelID,
+				Role:       role,
+				AskMode:    true,
+				ExecMode:   false,
+				MaxTurns:   maxTurns,
+				Cooldown:   cooldown,
+				HookPort:   hookPort,
+				ServeURL:   serveURL,
+				AgentName:  agentName,
+			}
+
+			d, err := talk.NewDaemon(cfg)
+			if err != nil {
+				return err
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+			go func() {
+				<-sigCh
+				cancel()
+			}()
+
+			return d.Run(ctx)
+		},
+	}
+	cmd.Flags().StringVar(&bridgeType, "bridge", "mattermost", "bridge type")
+	cmd.Flags().StringVar(&url, "url", "", "bridge server URL")
+	cmd.Flags().StringVar(&botToken, "bot-token", "", "bot authentication token")
+	cmd.Flags().StringVar(&channelID, "channel-id", "", "target channel ID")
+	cmd.Flags().StringVar(&role, "role", "", "agent role description")
+	cmd.Flags().IntVar(&hookPort, "hook-port", 10200, "hook server port")
+	cmd.Flags().StringVar(&serveURL, "serve-url", "", "dalcenter serve URL for registry")
+	cmd.Flags().StringVar(&agentName, "agent-name", "", "agent name for registration")
+	cmd.Flags().IntVar(&maxTurns, "max-turns", 10, "max response turns")
+	cmd.Flags().DurationVar(&cooldown, "cooldown", 3*time.Second, "cooldown between responses")
+	return cmd
+}
+
+func serveCmd() *cobra.Command {
+	var port int
+	cmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Run API server with agent registry",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+			go func() {
+				<-sigCh
+				cancel()
+			}()
+
+			s := serve.NewServer(port)
+			return s.Run(ctx)
+		},
+	}
+	cmd.Flags().IntVar(&port, "port", 10100, "API server port")
 	return cmd
 }
