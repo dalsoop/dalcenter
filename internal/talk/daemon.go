@@ -21,6 +21,7 @@ type Config struct {
 	ChannelID   string // target channel ID
 	BotUsername string // bot username for mention detection (e.g. "agent-200")
 	Role        string // agent role description
+	Cwd         string // working directory (repo root for code access)
 	AskMode     bool   // enable ask mode
 	ExecMode    bool   // enable exec mode
 	MentionOnly bool   // only respond when @mentioned
@@ -70,7 +71,7 @@ func NewDaemon(cfg Config) (*Daemon, error) {
 	return &Daemon{
 		cfg:       cfg,
 		br:        br,
-		executor:  NewExecutor(cfg.Role),
+		executor:  NewExecutor(cfg.Role, cfg.Cwd),
 		sanitizer: NewSanitizer(),
 		seen:      make(map[string]bool),
 	}, nil

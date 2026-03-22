@@ -22,9 +22,10 @@ const (
 type Executor struct {
 	Binary string
 	Role   string
+	Cwd    string // working directory (repo root)
 }
 
-func NewExecutor(role string) *Executor {
+func NewExecutor(role, cwd string) *Executor {
 	binary := "claude"
 	for _, p := range []string{"/usr/local/bin/claude", "/usr/bin/claude"} {
 		if _, err := exec.LookPath(p); err == nil {
@@ -32,7 +33,7 @@ func NewExecutor(role string) *Executor {
 			break
 		}
 	}
-	return &Executor{Binary: binary, Role: role}
+	return &Executor{Binary: binary, Role: role, Cwd: cwd}
 }
 
 // Run invokes Claude with the given message and mode.
@@ -54,6 +55,9 @@ func (e *Executor) Run(ctx context.Context, mode Mode, message string) (string, 
 
 	cmd := exec.CommandContext(ctx, e.Binary, args...)
 	cmd.Env = append(os.Environ(), "PATH=/usr/local/bin:/usr/bin:/bin")
+	if e.Cwd != "" {
+		cmd.Dir = e.Cwd
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

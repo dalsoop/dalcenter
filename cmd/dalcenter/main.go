@@ -1001,6 +1001,8 @@ func talkRunCmd() *cobra.Command {
 		channelID   string
 		botUsername string
 		role        string
+		cwd         string
+		execMode    bool
 		mentionOnly bool
 		hookPort    int
 		serveURL    string
@@ -1019,8 +1021,9 @@ func talkRunCmd() *cobra.Command {
 				ChannelID:   channelID,
 				BotUsername: botUsername,
 				Role:        role,
-				AskMode:     true,
-				ExecMode:    false,
+				Cwd:         cwd,
+				AskMode:     !execMode,
+				ExecMode:    execMode,
 				MentionOnly: mentionOnly,
 				MaxTurns:    maxTurns,
 				Cooldown:    cooldown,
@@ -1053,6 +1056,8 @@ func talkRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&channelID, "channel-id", "", "target channel ID")
 	cmd.Flags().StringVar(&botUsername, "bot-username", "", "bot username for mention detection")
 	cmd.Flags().StringVar(&role, "role", "", "agent role description")
+	cmd.Flags().StringVar(&cwd, "cwd", "", "working directory (repo root for code access)")
+	cmd.Flags().BoolVar(&execMode, "exec", false, "enable exec mode (tool use: Bash, Read, Write, Edit)")
 	cmd.Flags().BoolVar(&mentionOnly, "mention-only", false, "only respond when @mentioned")
 	cmd.Flags().IntVar(&hookPort, "hook-port", 10200, "hook server port")
 	cmd.Flags().StringVar(&serveURL, "serve-url", "", "dalcenter serve URL for registry")

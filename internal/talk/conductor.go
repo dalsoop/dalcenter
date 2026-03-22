@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"dalforge-hub/dalcenter/internal/bridge"
@@ -16,14 +17,21 @@ type ConductorConfig struct {
 	BotToken   string
 	ChannelID  string
 	BotUsername string
-	Agents     []AgentInfo // registered agents
-	HookPort   int
+	Agents     []AgentInfo
 }
 
 // AgentInfo describes a registered agent for the conductor.
 type AgentInfo struct {
-	Username string // MM bot username (e.g. "agent-200")
-	Role     string // role description (e.g. "마케팅 전략가")
+	Username string
+	Role     string
+}
+
+// threadState tracks an active thread.
+type threadState struct {
+	rootID  string
+	topic   string
+	done    bool
+	turns   int
 }
 
 // Conductor is the central orchestrator that routes messages to agents.
@@ -33,6 +41,9 @@ type Conductor struct {
 	executor  *Executor
 	sanitizer *Sanitizer
 	seen      map[string]bool
+	threads   map[string]*threadState // rootID → state
+	mu        sync.Mutex
+	botUserID string
 }
 
 func NewConductor(cfg ConductorConfig) (*Conductor, error) {
@@ -40,46 +51,46 @@ func NewConductor(cfg ConductorConfig) (*Conductor, error) {
 	return &Conductor{
 		cfg:       cfg,
 		br:        br,
-		executor:  NewExecutor("에이전트 오케스트레이터"),
+		executor:  NewExecutor("에이전트 오케스트레이터", ""),
 		sanitizer: NewSanitizer(),
 		seen:      make(map[string]bool),
+		threads:   make(map[string]*threadState),
 	}, nil
 }
 
-// Run starts the conductor and blocks until ctx is cancelled.
 func (c *Conductor) Run(ctx context.Context) error {
 	if err := c.br.Connect(); err != nil {
 		return fmt.Errorf("bridge connect: %w", err)
 	}
 	defer c.br.Close()
 
-	botUserID := ""
 	if mm, ok := c.br.(*bridge.MattermostBridge); ok {
-		botUserID = mm.BotUserID
+		c.botUserID = mm.BotUserID
 	}
 
-	// Build agent list description for Claude
 	agentList := c.buildAgentList()
-	log.Printf("[conductor] started, %d agents: %s", len(c.cfg.Agents), agentList)
-
-	go c.serveHook(ctx)
+	log.Printf("[conductor] started, channel=%s, %d agents", c.cfg.ChannelID, len(c.cfg.Agents))
 
 	for {
 		select {
 		case msg := <-c.br.Listen():
-			// Skip bot messages (self + other bots)
-			if msg.From == botUserID || c.isAgentMessage(msg.From) {
+			if msg.From == c.botUserID {
 				continue
 			}
-			// Skip if already in a thread (let agents handle thread replies)
-			if msg.RootID != "" {
+			if c.isAgentBot(msg.From) {
 				continue
 			}
 			if c.isDuplicate(msg.ID) {
 				continue
 			}
 
-			go c.route(ctx, msg, agentList)
+			if msg.RootID == "" {
+				// New root message → start a thread
+				go c.startThread(ctx, msg, agentList)
+			} else {
+				// Reply in existing thread → re-route or close
+				go c.handleThreadReply(ctx, msg, agentList)
+			}
 
 		case err := <-c.br.Errors():
 			log.Printf("[conductor] bridge error: %v", err)
@@ -90,14 +101,90 @@ func (c *Conductor) Run(ctx context.Context) error {
 	}
 }
 
-func (c *Conductor) route(ctx context.Context, msg bridge.Message, agentList string) {
-	log.Printf("[conductor] routing: %s", truncate(msg.Content, 80))
+func (c *Conductor) startThread(ctx context.Context, msg bridge.Message, agentList string) {
+	log.Printf("[conductor] new topic: %s", truncate(msg.Content, 80))
+
+	c.mu.Lock()
+	c.threads[msg.ID] = &threadState{
+		rootID: msg.ID,
+		topic:  msg.Content,
+	}
+	c.mu.Unlock()
+
+	response := c.askRoute(ctx, msg.Content, "", agentList)
+	if response == "" {
+		return
+	}
+
+	c.br.Send(bridge.Message{
+		Channel: msg.Channel,
+		Content: response,
+		RootID:  msg.ID,
+	})
+}
+
+func (c *Conductor) handleThreadReply(ctx context.Context, msg bridge.Message, agentList string) {
+	c.mu.Lock()
+	ts, exists := c.threads[msg.RootID]
+	c.mu.Unlock()
+
+	if !exists {
+		// Thread we didn't start — ignore
+		return
+	}
+	if ts.done {
+		return
+	}
+
+	// Check if user wants to close
+	lower := strings.ToLower(strings.TrimSpace(msg.Content))
+	if lower == "끝" || lower == "완료" || lower == "done" || lower == "close" {
+		c.closeThread(msg)
+		return
+	}
+
+	ts.turns++
+	log.Printf("[conductor] thread %s turn %d: %s", ts.rootID[:8], ts.turns, truncate(msg.Content, 80))
+
+	response := c.askRoute(ctx, msg.Content, ts.topic, agentList)
+	if response == "" {
+		return
+	}
+
+	c.br.Send(bridge.Message{
+		Channel: msg.Channel,
+		Content: response,
+		RootID:  msg.RootID,
+	})
+}
+
+func (c *Conductor) closeThread(msg bridge.Message) {
+	c.mu.Lock()
+	if ts, ok := c.threads[msg.RootID]; ok {
+		ts.done = true
+	}
+	c.mu.Unlock()
+
+	log.Printf("[conductor] thread %s closed", msg.RootID[:8])
+
+	c.br.Send(bridge.Message{
+		Channel: msg.Channel,
+		Content: "✅ done",
+		RootID:  msg.RootID,
+	})
+}
+
+func (c *Conductor) askRoute(ctx context.Context, message, threadTopic, agentList string) string {
+	contextLine := ""
+	if threadTopic != "" {
+		contextLine = fmt.Sprintf("\n진행 중인 주제: %s\n", threadTopic)
+	}
 
 	prompt := fmt.Sprintf(`너는 에이전트 오케스트레이터야. 사용자의 메시지를 분석해서 적절한 에이전트에게 작업을 배분해.
 
 등록된 에이전트:
 %s
-
+%s
 사용자 메시지: %s
 
 규칙:
@@ -105,24 +192,16 @@ func (c *Conductor) route(ctx context.Context, msg bridge.Message, agentList str
 - 여러 에이전트가 필요하면 각각 역할을 명시해
 - 간결하게 지시해 (2-3문장)
 - 에이전트가 없는 작업이면 직접 답변해
-- 반드시 @username 형식으로 태그해`, agentList, msg.Content)
+- 반드시 @username 형식으로 태그해`, agentList, contextLine, message)
 
 	response, err := c.executor.Run(ctx, ModeAsk, prompt)
 	if err != nil {
 		log.Printf("[conductor] claude error: %v", err)
-		return
+		return ""
 	}
 	response = c.sanitizer.Clean(response)
-	log.Printf("[conductor] routing decision: %s", truncate(response, 120))
-
-	// Post as thread reply to the original message
-	if err := c.br.Send(bridge.Message{
-		Channel: msg.Channel,
-		Content: response,
-		RootID:  msg.ID,
-	}); err != nil {
-		log.Printf("[conductor] send error: %v", err)
-	}
+	log.Printf("[conductor] routing: %s", truncate(response, 120))
+	return response
 }
 
 func (c *Conductor) buildAgentList() string {
@@ -133,22 +212,21 @@ func (c *Conductor) buildAgentList() string {
 	return strings.Join(parts, "\n")
 }
 
-func (c *Conductor) isAgentMessage(userID string) bool {
-	// Check if sender is a known bot by comparing with MM bot user IDs
-	// For now, we skip any bot message (bots have "from_bot" prop in MM)
-	// The bridge doesn't expose props yet, so we rely on the botUserID check in Run()
+func (c *Conductor) isAgentBot(userID string) bool {
+	// Known bot user IDs from bridge
+	// In production, this would query the serve registry
+	if mm, ok := c.br.(*bridge.MattermostBridge); ok {
+		_ = mm // future: check against registered bot IDs
+	}
 	return false
 }
 
 func (c *Conductor) isDuplicate(id string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.seen[id] {
 		return true
 	}
 	c.seen[id] = true
 	return false
-}
-
-func (c *Conductor) serveHook(ctx context.Context) {
-	// Conductor doesn't need a hook server for now
-	// but reserve the port for future use
 }
