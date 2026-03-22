@@ -154,7 +154,8 @@ func BuildAllCommandsWithRollback(spec Spec) []string {
 	if vmid == "" {
 		vmid = "0"
 	}
-	if len(spec.Packages) > 0 {
+	needsStart := len(spec.Packages) > 0 || len(spec.Agents) > 0
+	if needsStart {
 		cmds = append(cmds, "# on failure:")
 		cmds = append(cmds, BuildRollbackCommands(vmid)...)
 	}
