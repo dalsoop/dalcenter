@@ -10,6 +10,8 @@ import (
 	"dalforge-hub/dalcenter/internal/state"
 )
 
+const phsBinary = "proxmox-host-setup"
+
 // Spec describes what to provision.
 type Spec struct {
 	Base         string             // e.g. "ubuntu:24.04"
@@ -131,6 +133,11 @@ func BuildAllCommands(spec Spec) []string {
 		cmds = append(cmds, BuildAgentInstallCommand(vmid, agent))
 	}
 
+	// Credential sync step
+	for _, filter := range agentFilters(spec.Agents) {
+		cmds = append(cmds, fmt.Sprintf("%s ai mount --vmid %s --agent %s", phsBinary, vmid, filter))
+	}
+
 	return cmds
 }
 
@@ -149,7 +156,8 @@ func BuildAllCommandsWithRollback(spec Spec) []string {
 	if vmid == "" {
 		vmid = "0"
 	}
-	if len(spec.Packages) > 0 {
+	needsStart := len(spec.Packages) > 0 || len(spec.Agents) > 0
+	if needsStart {
 		cmds = append(cmds, "# on failure:")
 		cmds = append(cmds, BuildRollbackCommands(vmid)...)
 	}
@@ -193,18 +201,28 @@ func Provision(instanceRoot string, spec Spec, dryRun bool) Result {
 		vmid = strings.TrimSpace(output)
 	}
 
+	// Start container if packages or agents need it
+	needsStart := len(spec.Packages) > 0 || len(spec.Agents) > 0
+	if needsStart {
+		startCmd := exec.Command("pct", "start", vmid)
+		if startOut, err := startCmd.CombinedOutput(); err != nil {
+			errMsg := strings.TrimSpace(string(startOut))
+			rbStatus := rollback(vmid)
+			writeProvisionState(instanceRoot, vmid, "error", "start: "+errMsg, rbStatus)
+			return Result{VMID: vmid, Commands: cmds, Error: fmt.Errorf("pct start failed (rollback %s): %s", rbStatus, errMsg)}
+		}
+	}
+
 	// Install packages if any
 	if len(spec.Packages) > 0 {
 		installStep := append([]string{"exec", vmid, "--", "apt-get", "install", "-y", "-qq"}, spec.Packages...)
 		for _, step := range [][]string{
-			{"start", vmid},
 			{"exec", vmid, "--", "apt-get", "update", "-qq"},
 			installStep,
 		} {
 			stepCmd := exec.Command("pct", step...)
 			if stepOut, err := stepCmd.CombinedOutput(); err != nil {
 				errMsg := strings.TrimSpace(string(stepOut))
-				// Rollback: stop + destroy
 				rbStatus := rollback(vmid)
 				writeProvisionState(instanceRoot, vmid, "error", "package install: "+errMsg, rbStatus)
 				return Result{VMID: vmid, Commands: cmds, Error: fmt.Errorf("package install failed (rollback %s): %s", rbStatus, errMsg)}
@@ -229,6 +247,12 @@ func Provision(instanceRoot string, spec Spec, dryRun bool) Result {
 		agentStatuses[agent.Name] = "installed"
 	}
 
+	// Sync AI agent credentials from host into container
+	syncStatus := syncAgentCredentials(vmid, spec.Agents)
+	if syncStatus != "" {
+		agentStatuses["credential_sync"] = syncStatus
+	}
+
 	writeProvisionState(instanceRoot, vmid, "provisioned", "", "")
 	// Record agent statuses
 	if len(agentStatuses) > 0 {
@@ -238,6 +262,62 @@ func Provision(instanceRoot string, spec Spec, dryRun bool) Result {
 		}
 	}
 	return Result{VMID: vmid, Commands: cmds}
+}
+
+// syncAgentCredentials calls proxmox-host-setup to copy host credentials into the container.
+// Returns a status string for agentStatuses: "synced", "skipped", "error: ...", or "" (no agents).
+func syncAgentCredentials(vmid string, agents []export.AgentSpec) string {
+	filters := agentFilters(agents)
+	if len(filters) == 0 {
+		return ""
+	}
+
+	phs, err := exec.LookPath(phsBinary)
+	if err != nil {
+		fmt.Printf("[provision] %s not found, skipping credential sync\n", phsBinary)
+		return "skipped: " + phsBinary + " not found"
+	}
+
+	var errs []string
+	for _, filter := range filters {
+		fmt.Printf("[provision] syncing %s credentials → LXC %s\n", filter, vmid)
+		cmd := exec.Command(phs, "ai", "mount", "--vmid", vmid, "--agent", filter)
+		out, err := cmd.CombinedOutput()
+		output := strings.TrimSpace(string(out))
+		if err != nil {
+			fmt.Printf("[provision] %s credential sync warning: %s\n", filter, output)
+			errs = append(errs, filter+": "+output)
+		} else if output != "" {
+			fmt.Println(output)
+		}
+	}
+
+	if len(errs) > 0 {
+		return "error: " + strings.Join(errs, "; ")
+	}
+	return "synced"
+}
+
+// agentFilters maps dalforge agent types to proxmox-host-setup agent filter values.
+func agentFilters(agents []export.AgentSpec) []string {
+	seen := map[string]bool{}
+	var filters []string
+	for _, a := range agents {
+		var name string
+		switch a.Type {
+		case "claude_sdk":
+			name = "claude"
+		case "codex_appserver":
+			name = "codex"
+		case "gemini_cli":
+			name = "gemini"
+		}
+		if name != "" && !seen[name] {
+			seen[name] = true
+			filters = append(filters, name)
+		}
+	}
+	return filters
 }
 
 func rollback(vmid string) string {

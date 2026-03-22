@@ -360,15 +360,18 @@ func TestBuildAllCommandsWithAgents(t *testing.T) {
 		},
 	})
 
-	// create + start + update + install + claude npm + gpt4 comment = 6
-	if len(cmds) != 6 {
-		t.Fatalf("expected 6 commands, got %d: %v", len(cmds), cmds)
+	// create + start + update + install + claude npm + gpt4 comment + credential sync = 7
+	if len(cmds) != 7 {
+		t.Fatalf("expected 7 commands, got %d: %v", len(cmds), cmds)
 	}
 	if !strings.Contains(cmds[4], "npm install -g @anthropic-ai/claude-code") {
 		t.Fatalf("cmd[4]: %s", cmds[4])
 	}
 	if !strings.Contains(cmds[5], "# gpt4: openai_compatible") {
 		t.Fatalf("cmd[5]: %s", cmds[5])
+	}
+	if !strings.Contains(cmds[6], "proxmox-host-setup ai mount") {
+		t.Fatalf("cmd[6]: %s", cmds[6])
 	}
 }
 
@@ -381,11 +384,42 @@ func TestBuildAllCommandsAgentsOnlyNoPackages(t *testing.T) {
 			{Name: "claude", Type: "claude_sdk", Package: "@anthropic-ai/claude-code"},
 		},
 	})
-	// create + start + agent install = 3
-	if len(cmds) != 3 {
-		t.Fatalf("expected 3 commands, got %d: %v", len(cmds), cmds)
+	// create + start + agent install + credential sync = 4
+	if len(cmds) != 4 {
+		t.Fatalf("expected 4 commands, got %d: %v", len(cmds), cmds)
 	}
 	if !strings.Contains(cmds[1], "pct start") {
 		t.Fatalf("expected start, got: %s", cmds[1])
+	}
+	if !strings.Contains(cmds[3], "proxmox-host-setup ai mount") {
+		t.Fatalf("expected credential sync, got: %s", cmds[3])
+	}
+}
+
+func TestAgentFilters(t *testing.T) {
+	cases := []struct {
+		name    string
+		agents  []export.AgentSpec
+		expect  []string
+	}{
+		{"empty", nil, nil},
+		{"claude only", []export.AgentSpec{{Type: "claude_sdk"}}, []string{"claude"}},
+		{"codex only", []export.AgentSpec{{Type: "codex_appserver"}}, []string{"codex"}},
+		{"claude+codex", []export.AgentSpec{{Type: "claude_sdk"}, {Type: "codex_appserver"}}, []string{"claude", "codex"}},
+		{"unknown type ignored", []export.AgentSpec{{Type: "openai_compatible"}}, nil},
+		{"dedup", []export.AgentSpec{{Type: "claude_sdk"}, {Type: "claude_sdk"}}, []string{"claude"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := agentFilters(tc.agents)
+			if len(got) != len(tc.expect) {
+				t.Fatalf("expected %v, got %v", tc.expect, got)
+			}
+			for i := range got {
+				if got[i] != tc.expect[i] {
+					t.Fatalf("expected %v, got %v", tc.expect, got)
+				}
+			}
+		})
 	}
 }
