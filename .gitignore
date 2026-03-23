@@ -1,3 +1,4 @@
 # Build artifacts
 /dalcenter
 dist/
+dalcenter-test/
