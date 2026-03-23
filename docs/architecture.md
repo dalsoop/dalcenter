@@ -1,256 +1,136 @@
-# dalcenter 아키텍처 도안
+# dalcenter 아키텍처
 
 ## 전체 구조
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                    soft-serve (LXC)                  │
-│              경량 git 서버 (바이너리 하나)              │
-│                                                     │
-│  veilkey-localdal.git   myproject-localdal.git      │
-│         │                       │                   │
-│         └───── webhook ─────────┘                   │
-│                   │                                 │
-│            dalcenter sync                           │
-└─────────────────────────────────────────────────────┘
-                    │
-        ┌───────────┴───────────┐
-        ▼                       ▼
-┌──────────────┐       ┌──────────────┐
-│  veilkey     │       │  my-project  │
-│  -selfhosted │       │              │
-│              │       │              │
-│  .dal/ ◄─subtree     │  .dal/ ◄─subtree
-│    dev/      │       │    ops/      │
-│    reviewer/ │       │              │
-│    skills/   │       │    skills/   │
-│              │       │              │
-└──────┬───────┘       └──────┬───────┘
-       │                      │
-       ▼                      ▼
-┌──────────────┐       ┌──────────────┐
-│  LXC 300     │       │  LXC 400     │
-│  dal: dev    │       │  dal: ops    │
-│  player:     │       │  player:     │
-│   claude     │       │   codex      │
-│  CLAUDE.md ◄─┤       │  AGENTS.md ◄─┤
-│  skills/ ◄───┤       │  skills/ ◄───┤
-└──────────────┘       └──────────────┘
-┌──────────────┐
-│  LXC 301     │
-│  dal: reviewer│
-│  player:     │
-│   claude     │
-│  CLAUDE.md ◄─┤
-│  skills/ ◄───┤
-└──────────────┘
-```
-
-## localdal 레포 구조 (서비스 레포당 1개)
-
-```
-veilkey-localdal/
+LXC: dalcenter
+├── dalcenter serve              # 데몬
+│   ├── HTTP API (:11190)        # CLI 명령 수신
+│   ├── soft-serve (:23231)      # localdal git 호스팅 + webhook
+│   └── Docker 관리              # dal 컨테이너 생명주기
 │
-├── dal.spec.cue                # 스키마 정의 (모든 dal.cue가 따르는 규칙)
-│
-├── dev/                        # dal 1명 = 폴더 1개
-│   ├── dal.cue                 # UUID, player, 스킬 참조
-│   ├── instructions.md         # 지시사항 원본 (소환시 CLAUDE.md로 변환)
-│   └── hooks/
-│       └── pre-push.sh
-│
-├── reviewer/                   # dal 1명
-│   ├── dal.cue
-│   └── instructions.md
-│
-└── skills/                     # 공유 스킬 풀 (여러 dal이 참조)
-    ├── code-review/
-    │   └── SKILL.md
-    ├── testing/
-    │   └── SKILL.md
-    └── infra-ops/
-        └── SKILL.md
+├── Docker: leader (claude)      # dalcli-leader 내장
+├── Docker: dev (claude)         # dalcli 내장
+├── Docker: dev-2 (claude)       # 복수 소환 가능
+└── Docker: reviewer (codex)     # player별 다른 이미지
+    └── 각 Docker ←소켓→ dalcenter
+
+서비스 레포 (호스트 또는 다른 LXC)
+└── your-project/
+    └── .dal/ ←subtree→ soft-serve
 ```
 
-## dal.cue 예시
+## 바이너리 3개
 
-```cue
-// dev/dal.cue
-uuid:    "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-name:    "dev"
-version: "1.0.0"
-player:  "claude"
+| 바이너리 | 위치 | 역할 |
+|---|---|---|
+| dalcenter | LXC 호스트 | 운영자 — 인프라 + 전체 관리 |
+| dalcli-leader | leader 컨테이너 | 팀장 — 팀원 관리 + 작업 지시 |
+| dalcli | member 컨테이너 | 팀원 — 상태 조회 + 보고 |
 
-skills: [
-    "skills/code-review",
-    "skills/testing",
-]
-
-hooks: [
-    "hooks/pre-push.sh",
-]
-
-container: {
-    base:     "ubuntu:24.04"
-    packages: ["bash", "git", "nodejs"]
-}
-```
-
-## dalcenter 명령어 체계
+## 스코프 매트릭스
 
 ```
-dalcenter
-├── dal                          # dal 관리
-│   ├── create <name> --player   # dal 폴더 + dal.cue 생성
-│   ├── delete <name>            # dal 삭제 (소환중이면 경고)
-│   ├── list                     # 모든 dal 목록
-│   ├── config <name>            # dal.cue 편집
-│   ├── up <name> --repo --vmid  # 소환 (컨테이너 생성 + 배치)
-│   └── down <name>              # 해산 (컨테이너 정리)
-│
-├── skill                        # 스킬 관리
-│   ├── create <name>            # skills/<name>/ 폴더 생성
-│   ├── delete <name>            # 스킬 삭제 (사용중이면 경고)
-│   ├── add <dal> <skill>        # dal에 스킬 연결
-│   ├── remove <dal> <skill>     # dal에서 스킬 해제
-│   └── list [dal]               # 스킬 목록 (dal 지정시 그 dal의 스킬만)
-│
-├── sync                         # 일괄 배포
-│   └── [--all]                  # 변경 감지 → 영향받는 dal 재배포
-│
-├── status [name]                # 상태 조회
-└── init                         # localdal 레포 초기화
+                    dalcenter (운영자)    dalcli-leader (팀장)    dalcli (팀원)
+인프라
+  serve             ✅                    -                       -
+  init              ✅                    -                       -
+  validate          ✅                    -                       -
+생명주기
+  wake              ✅ 전체               ✅ 본인 팀              -
+  sleep             ✅ 전체               ✅ 본인 팀              -
+관찰
+  ps                ✅ 전체               ✅ 본인 팀              ✅ 본인 팀
+  status            ✅ 전체               ✅ 본인 팀              ✅ 본인만
+  logs              ✅ 전체               ✅ 본인 팀              -
+  attach            ✅ 전체               ✅ 본인 팀              -
+동기화
+  sync              ✅                    ✅                      -
+협업 (Mattermost)
+  assign            -                    ✅ 팀원에게 지시         -
+  report            -                    -                       ✅ 팀장에게 보고
 ```
 
-## 소환 (dal up) 상세 흐름
+## 전제
+
+- 1 localdal = 1 팀
+- leader 1명 + member N명
+- 인증 없음 (같은 LXC 내부 통신)
+
+## localdal (.dal/)
+
+서비스 레포당 1개. git subtree로 연결. SSOT.
 
 ```
-dalcenter dal up dev --repo /root/jeonghan/repository/veilkey-selfhosted --vmid 300
-
-  1. .dal/dev/dal.cue 읽기
-     → uuid: a1b2c3d4
-     → player: claude
-     → skills: [code-review, testing]
-     → container.base: ubuntu:24.04
-
-  2. LXC 컨테이너 생성 (vmid 300)
-     → pct create 300 ubuntu:24.04 ...
-     → pct start 300
-     → apt-get install bash git nodejs
-
-  3. player 설치
-     → player가 claude → npm install -g @anthropic-ai/claude-code
-     → player가 codex  → npm install -g @openai/codex
-
-  4. 파일 주입
-     → instructions.md → CLAUDE.md로 이름 변환 (player=claude이므로)
-     → 컨테이너 내 /root/.claude/CLAUDE.md에 복사
-
-  5. 스킬 주입
-     → .dal/skills/code-review/ → 컨테이너 내 /root/.claude/skills/code-review/
-     → .dal/skills/testing/     → 컨테이너 내 /root/.claude/skills/testing/
-
-  6. 인증 정보 동기화
-     → proxmox-host-setup ai mount --vmid 300 --agent claude
-
-  7. 레포 마운트/클론
-     → 컨테이너에서 veilkey-selfhosted 레포 접근 가능하게
-
-  8. registry 업데이트
-     → uuid=a1b2c3d4, vmid=300, repo=veilkey, status=up
-
-  9. 완료
-     → "dev (a1b2c3d4) summoned → LXC 300, player=claude, skills=2"
+.dal/
+  dal.spec.cue              스키마 정의
+  leader/
+    dal.cue                 uuid, player, role:leader
+    instructions.md         → wake 시 CLAUDE.md로 변환
+  dev/
+    dal.cue                 uuid, player, role:member
+    instructions.md
+  skills/                   공유 스킬 풀
+    code-review/SKILL.md
 ```
 
-## 해산 (dal down) 상세 흐름
+## wake 흐름
 
 ```
-dalcenter dal down dev
+dalcenter wake dev
 
-  1. registry에서 dev 조회 → vmid=300
-
-  2. 컨테이너 정리
-     → pct stop 300
-     → pct destroy 300 --purge
-
-  3. registry 업데이트
-     → status=down, dismissed_at=now
-
-  4. 완료
-     → "dev (a1b2c3d4) dismissed ← LXC 300"
+  1. .dal/dev/dal.cue 읽기 → player, skills, git config
+  2. Docker 컨테이너 생성 (dalcenter/claude:latest)
+  3. instructions.md → CLAUDE.md 변환 (bind mount)
+  4. skills/ → ~/.claude/skills/ (bind mount)
+  5. .credentials.json 마운트 (read-only)
+  6. 서비스 레포 → /workspace (bind mount)
+  7. GitHub 토큰 주입 (dal.cue git.github_token)
+  8. dalcli / dalcli-leader 바이너리 주입 (docker cp)
+  9. Mattermost 봇 계정 생성 + 채널 참가
+  10. 환경변수: DAL_NAME, DAL_UUID, DAL_ROLE, DALCENTER_URL, GH_TOKEN
 ```
 
-## 일괄 배포 (sync) 상세 흐름
+## sync 흐름
 
 ```
-[localdal에서 skills/code-review/SKILL.md 수정 → git push]
-
-soft-serve webhook → dalcenter sync
-
-  1. git diff로 변경된 파일 감지
-     → skills/code-review/SKILL.md 변경됨
-
-  2. 역참조: "code-review 스킬을 쓰는 dal은?"
-     → registry 조회 → dev (LXC 300), reviewer (LXC 301)
-
-  3. 영향받는 dal 컨테이너에 재배포
-     → LXC 300: skills/code-review/ 재복사
-     → LXC 301: skills/code-review/ 재복사
-
-  4. 완료
-     → "synced: skills/code-review → dev (300), reviewer (301)"
+.dal/skills/code-review/SKILL.md 수정 → git push
+  → soft-serve post-receive hook
+  → curl POST dalcenter:11190/api/sync
+  → bind mount라 컨테이너에서 즉시 반영
 ```
 
-## 데이터 모델 (registry.db)
+## Mattermost 통신
 
-```sql
--- dal 정의
-CREATE TABLE dals (
-    uuid TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    folder TEXT NOT NULL,           -- 폴더명 (별명)
-    player TEXT NOT NULL,           -- claude, codex, gemini
-    localdal_repo TEXT,             -- soft-serve repo URL
-    service_repo TEXT,              -- /path/to/veilkey
-    version TEXT,
-    created_at TEXT
-);
+- 프로젝트당 채널 1개 (serve 시 자동 생성)
+- dal별 봇 계정 (wake 시 자동 생성)
+- assign → @mention으로 작업 지시
+- report → [dal-name] 보고
 
--- dal ↔ 스킬 매핑
-CREATE TABLE dal_skills (
-    dal_uuid TEXT REFERENCES dals(uuid),
-    skill_path TEXT,                -- "skills/code-review"
-    PRIMARY KEY (dal_uuid, skill_path)
-);
-
--- 소환된 인스턴스
-CREATE TABLE instances (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    dal_uuid TEXT REFERENCES dals(uuid),
-    vmid TEXT,                      -- LXC container ID
-    status TEXT DEFAULT 'down',     -- up, down, error
-    assigned_repo TEXT,             -- /path/to/veilkey
-    summoned_at TEXT,
-    dismissed_at TEXT,
-    last_synced_at TEXT
-);
-```
-
-## 파일명 변환 규칙
+## Docker 이미지
 
 ```
-localdal 원본          player       컨테이너에 주입되는 파일
-─────────────────────────────────────────────────────────
-instructions.md   →   claude   →   CLAUDE.md
-instructions.md   →   codex    →   AGENTS.md
-instructions.md   →   gemini   →   GEMINI.md
+dalcenter/claude:latest    ubuntu + nodejs + claude-code + gh CLI
+dalcenter/codex:latest     ubuntu + nodejs + codex
+dalcenter/gemini:latest    ubuntu + python3 + gemini-cli
 ```
 
 ## 환경변수
 
 ```
-DALCENTER_DATA              # dalcenter 데이터 경로 (기본: ~/.dalcenter)
-DALCENTER_LOCALDAL_PATH     # localdal 경로 (기본: .dal/)
-DALCENTER_SOFT_SERVE_URL    # soft-serve SSH URL
+운영자:
+  DALCENTER_URL               데몬 주소 (기본: http://localhost:11190)
+  DALCENTER_LOCALDAL_PATH     localdal 경로 (기본: .dal/)
+  DALCENTER_MM_URL            Mattermost URL
+  DALCENTER_MM_TOKEN          Mattermost admin token
+  DALCENTER_MM_TEAM           Mattermost team name
+
+컨테이너 내 (wake 시 자동):
+  DAL_NAME                    dal 이름
+  DAL_UUID                    dal UUID
+  DAL_ROLE                    leader / member
+  DAL_PLAYER                  claude / codex / gemini
+  DALCENTER_URL               데몬 주소
+  GH_TOKEN / GITHUB_TOKEN     GitHub 인증
+  GIT_AUTHOR_NAME/EMAIL       git 커밋 정보
 ```
