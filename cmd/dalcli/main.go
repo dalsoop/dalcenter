@@ -86,7 +86,7 @@ func reportCmd(dalName string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client := daemon.NewClient()
 			msg := fmt.Sprintf("[%s] 보고: %s", dalName, args[0])
-			if err := client.Message(dalName, msg); err != nil {
+			if _, err := client.Message(dalName, msg); err != nil {
 				return err
 			}
 			fmt.Printf("reported: %s\n", args[0])

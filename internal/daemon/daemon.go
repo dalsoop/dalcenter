@@ -349,8 +349,9 @@ func (d *Daemon) handleLogs(w http.ResponseWriter, r *http.Request) {
 
 func (d *Daemon) handleMessage(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		From    string `json:"from"`
-		Message string `json:"message"`
+		From     string `json:"from"`
+		Message  string `json:"message"`
+		ThreadID string `json:"thread_id,omitempty"` // reply to thread
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", 400)
@@ -371,15 +372,32 @@ func (d *Daemon) handleMessage(w http.ResponseWriter, r *http.Request) {
 		token = c.BotToken
 	}
 
-	// Post message to channel
-	body := fmt.Sprintf(`{"channel_id":%q,"message":%q}`, d.channelID, req.Message)
-	_, err := mmPost(d.mm.URL, token, "/api/v4/posts", body)
+	// Post message (with optional thread)
+	var body string
+	if req.ThreadID != "" {
+		body = fmt.Sprintf(`{"channel_id":%q,"message":%q,"root_id":%q}`, d.channelID, req.Message, req.ThreadID)
+	} else {
+		body = fmt.Sprintf(`{"channel_id":%q,"message":%q}`, d.channelID, req.Message)
+	}
+	respBody, err := mmPost(d.mm.URL, token, "/api/v4/posts", body)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("post failed: %v", err), 500)
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]string{"status": "sent", "channel": d.channelID[:8]})
+	// Return post ID so caller can start/continue thread
+	postID := ""
+	var postResp map[string]any
+	if json.Unmarshal(respBody, &postResp) == nil {
+		if id, ok := postResp["id"].(string); ok {
+			postID = id
+		}
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "sent",
+		"post_id": postID,
+	})
 }
 
 func mmPost(mmURL, token, path, body string) ([]byte, error) {

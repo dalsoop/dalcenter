@@ -154,10 +154,11 @@ func assignCmd(dalName string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client := daemon.NewClient()
 			msg := fmt.Sprintf("@dal-%s 작업 지시: %s", args[0], args[1])
-			if err := client.Message(dalName, msg); err != nil {
+			result, err := client.Message(dalName, msg)
+			if err != nil {
 				return err
 			}
-			fmt.Printf("assigned: %s → %s\n", args[0], args[1])
+			fmt.Printf("assigned: %s → %s (thread: %s)\n", args[0], args[1], result.PostID)
 			return nil
 		},
 	}
