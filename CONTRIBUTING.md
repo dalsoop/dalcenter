@@ -27,8 +27,8 @@ internal/
   localdal/        dal/skill CRUD + CUE 검증
   talk/            Mattermost 봇 통신
   bridge/          Mattermost 메시지 브릿지
-  vault/           시크릿 관리
 dockerfiles/       player별 Docker 이미지
+examples/          leader/dev instructions.md 예시
 ```
 
 ## Validation
