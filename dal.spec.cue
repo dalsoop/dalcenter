@@ -1,12 +1,9 @@
 package dalcenter
 
 // ===================================================
-// dal.spec.cue — dalforge 핵심 스펙 v1.0.0
+// dal.spec.cue — dalcenter 스펙 v2.0.0
 //
-// 하위 호환 정책:
-//   major: 기존 .dal-template 호환 깨짐 (마이그레이션 필수)
-//   minor: 필드 추가만 허용 (기존 유효성 유지)
-//   patch: 설명/주석만 변경
+// localdal 기반 dal 관리. .dal/ 폴더에 dal.cue로 정의.
 // ===================================================
 
 // ===== 공통 타입 =====
@@ -165,9 +162,9 @@ builtin_categories: {
 	hooks?:  [...string]
 }
 
-// ===== dal 프로필 (허브용) =====
+// ===== dal 프로필 =====
 
-// dalforge/dalforge 허브 레포의 각 dal 폴더에 위치
+// .dal/<name>/dal.cue에 정의
 // UUID로 식별, 폴더명은 별명
 #DalProfile: {
 	uuid!:        string & != ""
@@ -181,46 +178,10 @@ builtin_categories: {
 	exports?: [string]: #AgentExport
 }
 
-// ===== .dal-template 템플릿 (레거시) =====
-
-// .dal-template/templates/ 안에 여러 템플릿이 존재
-// dalcenter join {template} 으로 인스턴스 생성
-#DalTemplate: {
-	schema_version!: #SemVer
-	name!:           string & != ""
-	description?:    string
-	container!:      #ContainerSpec
-	cli?: [...#DalID]
-	skills?: [...#DalID]
-	hooks?: [...#DalID]
-	secrets?: [...#SecretEntry]
-	permissions?: #Permissions
-	compatibility?: #Compatibility
-	health_check?: #HealthCheck
-	build?: #BuildSpec
-	exports?: [string]: #AgentExport
-}
-
-// ===== .dal-template 루트 =====
-
-// 레포 루트의 .dal-template/ 폴더 정의
-#DalManifest: {
-	schema_version!: #SemVer
-	dal!: {
-		id!:       #DalID
-		name!:     string & != ""
-		version!:  #SemVer
-		category!: #CategoryID
-	}
-	description?: string
-	depends?: [...#Dependency]
-	templates!: [string]: #DalTemplate
-}
-
 // ===== localdal (인형 인스턴스) =====
 
 // localdal 하나 = dal 인형 하나
-// .dal-template 템플릿 기반으로 생성
+// .dal/<name>/dal.cue 기반으로 생성
 #LocalDalStatus: "active" | "stopped" | "error" | "updating"
 
 #LocalDal: {
@@ -288,7 +249,7 @@ builtin_categories: {
 
 // ===== 감사 =====
 
-#AuditAction: "join" | "install" | "update" | "remove" | "deprecate" | "retire" | "sync"
+#AuditAction: "wake" | "sleep" | "sync" | "update" | "remove" | "create" | "delete"
 #AuditResult: "success" | "failure" | "skipped"
 
 #AuditEvent: {

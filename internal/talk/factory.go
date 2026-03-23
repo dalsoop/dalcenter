@@ -9,21 +9,21 @@ import (
 	"strings"
 )
 
-// FactoryTalk represents the talk block from .dal-template/dal.cue.
+// FactoryTalk represents the talk block from .dal/dal.cue.
 type FactoryTalk struct {
 	Channel   string   `json:"channel"`
 	Conductor string   `json:"conductor"`
 	Dals      []string `json:"dals"`
 }
 
-// FactoryDal represents a dal definition from .dal-template/{name}/dal.cue.
+// FactoryDal represents a dal definition from .dal/{name}/dal.cue.
 type FactoryDal struct {
 	Name   string `json:"name"`
 	Role   string `json:"role"`
 	Player string `json:"player"` // "claude" or "codex"
 }
 
-// LoadTalkConfig reads the talk block from .dal-template/dal.cue.
+// LoadTalkConfig reads the talk block from .dal/dal.cue.
 // Uses a simple key-value parser (not full CUE) for portability.
 func LoadTalkConfig(dalTemplatePath string) (*FactoryTalk, error) {
 	dalCuePath := filepath.Join(dalTemplatePath, "dal.cue")
@@ -65,7 +65,7 @@ func LoadTalkConfig(dalTemplatePath string) (*FactoryTalk, error) {
 	return talk, nil
 }
 
-// LoadFactoryDal reads a dal definition from .dal-template/{name}/dal.cue.
+// LoadFactoryDal reads a dal definition from .dal/{name}/dal.cue.
 func LoadFactoryDal(dalTemplatePath, name string) (*FactoryDal, error) {
 	dalCuePath := filepath.Join(dalTemplatePath, name, "dal.cue")
 	data, err := os.ReadFile(dalCuePath)
@@ -99,7 +99,7 @@ func LoadFactoryDal(dalTemplatePath, name string) (*FactoryDal, error) {
 	return dal, nil
 }
 
-// SetupFromFactory reads .dal-template and creates all bots + channel.
+// SetupFromFactory reads .dal and creates all bots + channel.
 func SetupFromFactory(dalTemplatePath, mmURL, adminLogin, adminPassword, team string) error {
 	talkCfg, err := LoadTalkConfig(dalTemplatePath)
 	if err != nil {
