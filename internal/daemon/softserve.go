@@ -39,6 +39,14 @@ func startSoftServe(ctx context.Context) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
+// softServeSSHPort returns the SSH port for soft-serve.
+func softServeSSHPort() string {
+	if p := os.Getenv("SOFT_SERVE_SSH_PORT"); p != "" {
+		return p
+	}
+	return "23231"
+}
+
 // softServeDataPath returns the data directory for soft-serve.
 func softServeDataPath() string {
 	if p := os.Getenv("SOFT_SERVE_DATA_PATH"); p != "" {
@@ -55,8 +63,8 @@ func EnsureSoftServeRepo(repoName string) error {
 		return fmt.Errorf("ssh not found: %w", err)
 	}
 
-	// Try creating — if it already exists, soft-serve returns error (ignored)
-	cmd := exec.Command(sshBin, "-p", "23231", "-o", "StrictHostKeyChecking=no", "localhost", "repo", "create", repoName)
+	port := softServeSSHPort()
+	cmd := exec.Command(sshBin, "-p", port, "-o", "StrictHostKeyChecking=no", "localhost", "repo", "create", repoName)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		// Ignore "already exists" errors
@@ -78,7 +86,8 @@ func SetupSubtree(serviceRepo, repoName string) error {
 		return fmt.Errorf("git not found: %w", err)
 	}
 
-	remoteURL := fmt.Sprintf("ssh://localhost:23231/%s", repoName)
+	port := softServeSSHPort()
+	remoteURL := fmt.Sprintf("ssh://localhost:%s/%s", port, repoName)
 
 	// Check if remote exists
 	cmd := exec.Command(gitBin, "-C", serviceRepo, "remote", "get-url", "localdal")
