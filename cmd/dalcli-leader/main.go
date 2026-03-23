@@ -152,8 +152,12 @@ func assignCmd(dalName string) *cobra.Command {
 		Short: "Assign task to team member (via Mattermost)",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO: Mattermost 경유 팀원에게 작업 지시
-			fmt.Printf("[%s] assign %s: %s (not yet implemented — will send via Mattermost)\n", dalName, args[0], args[1])
+			client := daemon.NewClient()
+			msg := fmt.Sprintf("@dal-%s 작업 지시: %s", args[0], args[1])
+			if err := client.Message(dalName, msg); err != nil {
+				return err
+			}
+			fmt.Printf("assigned: %s → %s\n", args[0], args[1])
 			return nil
 		},
 	}

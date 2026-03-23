@@ -4,18 +4,31 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/dalsoop/dalcenter/internal/localdal"
+	"github.com/dalsoop/dalcenter/internal/talk"
 )
+
+// MattermostConfig holds Mattermost connection settings.
+type MattermostConfig struct {
+	URL       string // e.g. http://10.50.0.202:8065
+	AdminToken string // PAT with admin access
+	TeamName  string // e.g. "prelik"
+}
 
 // Daemon is the dalcenter HTTP API server.
 type Daemon struct {
 	addr         string
 	localdalRoot string
 	serviceRepo  string // service repo path to mount as /workspace
+	mm           *MattermostConfig
+	channelID    string // channel for this project
 	containers   map[string]*Container // dal name -> container
 	mu           sync.RWMutex
 }
@@ -29,20 +42,37 @@ type Container struct {
 	ContainerID string `json:"container_id"`
 	Status      string `json:"status"` // "running", "stopped"
 	Skills      int    `json:"skills"`
+	BotToken    string `json:"-"` // Mattermost bot token
 }
 
 // New creates a daemon.
-func New(addr, localdalRoot, serviceRepo string) *Daemon {
+func New(addr, localdalRoot, serviceRepo string, mm *MattermostConfig) *Daemon {
 	return &Daemon{
 		addr:         addr,
 		localdalRoot: localdalRoot,
 		serviceRepo:  serviceRepo,
+		mm:           mm,
 		containers:   make(map[string]*Container),
 	}
 }
 
 // Run starts the HTTP server.
 func (d *Daemon) Run(ctx context.Context) error {
+	// Setup Mattermost channel (repo name = channel name)
+	if d.mm != nil && d.mm.URL != "" {
+		repoName := filepath.Base(d.serviceRepo)
+		if repoName == "" || repoName == "." {
+			repoName = "dalcenter"
+		}
+		teamID, channelID, err := talk.GetTeamAndChannel(d.mm.URL, d.mm.AdminToken, d.mm.TeamName, repoName)
+		if err != nil {
+			log.Printf("[daemon] mattermost channel setup failed: %v", err)
+		} else {
+			d.channelID = channelID
+			log.Printf("[daemon] mattermost: team=%s channel=%s (%s)", teamID, channelID[:8], repoName)
+		}
+	}
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/ps", d.handlePs)
@@ -51,6 +81,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /api/wake/{name}", d.handleWake)
 	mux.HandleFunc("POST /api/sleep/{name}", d.handleSleep)
 	mux.HandleFunc("POST /api/sync", d.handleSync)
+	mux.HandleFunc("POST /api/message", d.handleMessage)
 	mux.HandleFunc("POST /api/validate", d.handleValidate)
 	mux.HandleFunc("GET /api/logs/{name}", d.handleLogs)
 
@@ -157,6 +188,20 @@ func (d *Daemon) handleWake(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Setup Mattermost bot for this dal
+	var botToken string
+	if d.mm != nil && d.mm.URL != "" && d.channelID != "" {
+		botUsername := fmt.Sprintf("dal-%s", dal.Name)
+		teamID, _, _ := talk.GetTeamAndChannel(d.mm.URL, d.mm.AdminToken, d.mm.TeamName, filepath.Base(d.serviceRepo))
+		bot, err := talk.SetupBot(d.mm.URL, d.mm.AdminToken, teamID, d.channelID, botUsername, dal.Name, fmt.Sprintf("dal %s (%s)", dal.Name, dal.Role))
+		if err != nil {
+			log.Printf("[daemon] mattermost bot setup for %s: %v (continuing without)", name, err)
+		} else {
+			botToken = bot.Token
+			log.Printf("[daemon] mattermost bot: %s (user=%s)", botUsername, bot.UserID[:8])
+		}
+	}
+
 	d.mu.Lock()
 	d.containers[name] = &Container{
 		DalName:     dal.Name,
@@ -166,6 +211,7 @@ func (d *Daemon) handleWake(w http.ResponseWriter, r *http.Request) {
 		ContainerID: containerID,
 		Status:      "running",
 		Skills:      len(dal.Skills),
+		BotToken:    botToken,
 	}
 	d.mu.Unlock()
 
@@ -282,6 +328,57 @@ func (d *Daemon) handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain")
 	w.Write([]byte(logs))
+}
+
+func (d *Daemon) handleMessage(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		From    string `json:"from"`
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", 400)
+		return
+	}
+	if d.mm == nil || d.channelID == "" {
+		http.Error(w, "mattermost not configured", 503)
+		return
+	}
+
+	// Find the bot token for the sender
+	d.mu.RLock()
+	c, ok := d.containers[req.From]
+	d.mu.RUnlock()
+
+	token := d.mm.AdminToken // fallback to admin token
+	if ok && c.BotToken != "" {
+		token = c.BotToken
+	}
+
+	// Post message to channel
+	body := fmt.Sprintf(`{"channel_id":%q,"message":%q}`, d.channelID, req.Message)
+	_, err := mmPost(d.mm.URL, token, "/api/v4/posts", body)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("post failed: %v", err), 500)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{"status": "sent", "channel": d.channelID[:8]})
+}
+
+func mmPost(mmURL, token, path, body string) ([]byte, error) {
+	req, _ := http.NewRequest("POST", mmURL+path, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("%d: %s", resp.StatusCode, string(respBody))
+	}
+	return respBody, nil
 }
 
 func (d *Daemon) dalCuePath(name string) string {

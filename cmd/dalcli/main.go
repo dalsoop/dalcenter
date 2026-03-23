@@ -84,8 +84,12 @@ func reportCmd(dalName string) *cobra.Command {
 		Short: "Report to leader (via Mattermost)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO: Mattermost 경유 leader에게 보고
-			fmt.Printf("[%s] report: %s (not yet implemented — will send via Mattermost)\n", dalName, args[0])
+			client := daemon.NewClient()
+			msg := fmt.Sprintf("[%s] 보고: %s", dalName, args[0])
+			if err := client.Message(dalName, msg); err != nil {
+				return err
+			}
+			fmt.Printf("reported: %s\n", args[0])
 			return nil
 		},
 	}

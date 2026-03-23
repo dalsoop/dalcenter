@@ -43,6 +43,21 @@ func (c *Client) Sync() (map[string]any, error) {
 	return c.postAny("/api/sync")
 }
 
+// Message posts a message to the project channel.
+func (c *Client) Message(from, message string) error {
+	body := fmt.Sprintf(`{"from":%q,"message":%q}`, from, message)
+	resp, err := c.http.Post(c.baseURL+"/api/message", "application/json", strings.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("daemon unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("message failed: %s", strings.TrimSpace(string(b)))
+	}
+	return nil
+}
+
 // Ps returns running containers.
 func (c *Client) Ps() ([]*Container, error) {
 	resp, err := c.http.Get(c.baseURL + "/api/ps")
