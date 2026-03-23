@@ -23,6 +23,10 @@ type DalProfile struct {
 	Hooks      []string
 	FolderName string // directory name
 	Path       string // absolute path to dal folder
+	// Git config
+	GitUser        string
+	GitEmail       string
+	GitHubToken    string // VeilKey ref or raw token
 }
 
 // Init initializes a localdal repository at the given path.
@@ -176,6 +180,16 @@ func ReadDalCue(path, folderName string) (*DalProfile, error) {
 				}
 			}
 		}
+	}
+	// Git config
+	if v := val.LookupPath(cue.ParsePath("git.user")); v.Exists() {
+		p.GitUser, _ = v.String()
+	}
+	if v := val.LookupPath(cue.ParsePath("git.email")); v.Exists() {
+		p.GitEmail, _ = v.String()
+	}
+	if v := val.LookupPath(cue.ParsePath("git.github_token")); v.Exists() {
+		p.GitHubToken, _ = v.String()
 	}
 	return p, nil
 }

@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -89,11 +91,40 @@ func dockerRun(localdalRoot, serviceRepo string, dal *localdal.DalProfile) (stri
 	instrDst := filepath.Join(home, instructionsFileName(dal.Player))
 	args = append(args, "-v", fmt.Sprintf("%s:%s:ro", instrSrc, instrDst))
 
-	// Git config
-	args = append(args, "-e", fmt.Sprintf("GIT_AUTHOR_NAME=dal-%s", dal.Name))
-	args = append(args, "-e", fmt.Sprintf("GIT_AUTHOR_EMAIL=dal-%s@dalcenter.local", dal.Name))
-	args = append(args, "-e", fmt.Sprintf("GIT_COMMITTER_NAME=dal-%s", dal.Name))
-	args = append(args, "-e", fmt.Sprintf("GIT_COMMITTER_EMAIL=dal-%s@dalcenter.local", dal.Name))
+	// Git config from dal.cue or defaults
+	gitUser := dal.GitUser
+	if gitUser == "" {
+		gitUser = "dal-" + dal.Name
+	}
+	gitEmail := dal.GitEmail
+	if gitEmail == "" {
+		gitEmail = fmt.Sprintf("dal-%s@dalcenter.local", dal.Name)
+	}
+	args = append(args, "-e", fmt.Sprintf("GIT_AUTHOR_NAME=%s", gitUser))
+	args = append(args, "-e", fmt.Sprintf("GIT_AUTHOR_EMAIL=%s", gitEmail))
+	args = append(args, "-e", fmt.Sprintf("GIT_COMMITTER_NAME=%s", gitUser))
+	args = append(args, "-e", fmt.Sprintf("GIT_COMMITTER_EMAIL=%s", gitEmail))
+
+	// GitHub token for git push + gh CLI
+	if dal.GitHubToken != "" {
+		token := dal.GitHubToken
+		// Resolve references
+		if strings.HasPrefix(token, "VK:") {
+			resolved, err := resolveVeilKey(token)
+			if err != nil {
+				log.Printf("[docker] warning: failed to resolve %s: %v", token, err)
+			} else {
+				token = resolved
+			}
+		} else if strings.HasPrefix(token, "env:") {
+			envName := strings.TrimPrefix(token, "env:")
+			token = os.Getenv(envName)
+		}
+		if token != "" && !strings.HasPrefix(token, "VK:") && !strings.HasPrefix(token, "env:") {
+			args = append(args, "-e", fmt.Sprintf("GITHUB_TOKEN=%s", token))
+			args = append(args, "-e", fmt.Sprintf("GH_TOKEN=%s", token))
+		}
+	}
 
 	args = append(args, image)
 
@@ -110,6 +141,43 @@ func dockerRun(localdalRoot, serviceRepo string, dal *localdal.DalProfile) (stri
 	}
 
 	return containerID, nil
+}
+
+// resolveVeilKey resolves a VK: reference via veil CLI or localvault API.
+func resolveVeilKey(ref string) (string, error) {
+	// Try veil CLI first
+	if path, err := exec.LookPath("veil"); err == nil {
+		cmd := exec.Command(path, "resolve", ref)
+		out, err := cmd.Output()
+		if err == nil {
+			return strings.TrimSpace(string(out)), nil
+		}
+	}
+
+	// Try veilkey-cli
+	if path, err := exec.LookPath("veilkey-cli"); err == nil {
+		cmd := exec.Command(path, "resolve", ref)
+		out, err := cmd.Output()
+		if err == nil {
+			return strings.TrimSpace(string(out)), nil
+		}
+	}
+
+	// Fallback: localvault HTTP API
+	lvURL := os.Getenv("VEILKEY_LOCALVAULT_URL")
+	if lvURL == "" {
+		return "", fmt.Errorf("no veil CLI or VEILKEY_LOCALVAULT_URL to resolve %s", ref)
+	}
+	resp, err := http.Get(lvURL + "/api/resolve/" + ref)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("resolve %s: %s", ref, string(body))
+	}
+	return strings.TrimSpace(string(body)), nil
 }
 
 // injectCli copies dalcli or dalcli-leader binary into the container.
