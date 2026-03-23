@@ -102,7 +102,46 @@ func dockerRun(localdalRoot, serviceRepo string, dal *localdal.DalProfile) (stri
 	if err != nil {
 		return "", fmt.Errorf("docker run: %s: %w", strings.TrimSpace(string(out)), err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	containerID := strings.TrimSpace(string(out))
+
+	// Inject dalcli / dalcli-leader based on role
+	if err := injectCli(containerID, dal.Role); err != nil {
+		log.Printf("[docker] warning: failed to inject dalcli: %v", err)
+	}
+
+	return containerID, nil
+}
+
+// injectCli copies dalcli or dalcli-leader binary into the container.
+func injectCli(containerID, role string) error {
+	// Find binaries next to dalcenter binary
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	binDir := filepath.Dir(self)
+
+	// Always inject dalcli
+	dalcliPath := filepath.Join(binDir, "dalcli")
+	if _, err := os.Stat(dalcliPath); err == nil {
+		cp := exec.Command("docker", "cp", dalcliPath, containerID+":/usr/local/bin/dalcli")
+		if out, err := cp.CombinedOutput(); err != nil {
+			return fmt.Errorf("inject dalcli: %s: %w", strings.TrimSpace(string(out)), err)
+		}
+	}
+
+	// Inject dalcli-leader for leader role
+	if role == "leader" {
+		leaderPath := filepath.Join(binDir, "dalcli-leader")
+		if _, err := os.Stat(leaderPath); err == nil {
+			cp := exec.Command("docker", "cp", leaderPath, containerID+":/usr/local/bin/dalcli-leader")
+			if out, err := cp.CombinedOutput(); err != nil {
+				return fmt.Errorf("inject dalcli-leader: %s: %w", strings.TrimSpace(string(out)), err)
+			}
+		}
+	}
+
+	return nil
 }
 
 // dockerStop stops and removes a Docker container.
