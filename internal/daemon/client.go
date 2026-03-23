@@ -44,18 +44,31 @@ func (c *Client) Sync() (map[string]any, error) {
 }
 
 // Message posts a message to the project channel.
-func (c *Client) Message(from, message string) error {
-	body := fmt.Sprintf(`{"from":%q,"message":%q}`, from, message)
+// MessageResult contains the response from posting a message.
+type MessageResult struct {
+	PostID string `json:"post_id"`
+}
+
+// Message posts a message to the project channel.
+func (c *Client) Message(from, message string) (*MessageResult, error) {
+	return c.MessageThread(from, message, "")
+}
+
+// MessageThread posts a message as a thread reply.
+func (c *Client) MessageThread(from, message, threadID string) (*MessageResult, error) {
+	body := fmt.Sprintf(`{"from":%q,"message":%q,"thread_id":%q}`, from, message, threadID)
 	resp, err := c.http.Post(c.baseURL+"/api/message", "application/json", strings.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("daemon unreachable: %w", err)
+		return nil, fmt.Errorf("daemon unreachable: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("message failed: %s", strings.TrimSpace(string(b)))
+		return nil, fmt.Errorf("message failed: %s", strings.TrimSpace(string(b)))
 	}
-	return nil
+	var result MessageResult
+	json.NewDecoder(resp.Body).Decode(&result)
+	return &result, nil
 }
 
 // Ps returns running containers.

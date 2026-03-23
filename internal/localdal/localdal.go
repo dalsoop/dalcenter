@@ -17,8 +17,9 @@ type DalProfile struct {
 	UUID       string
 	Name       string
 	Version    string
-	Player     string
-	Role       string // "leader" or "member"
+	Player        string
+	PlayerVersion string // e.g. "2.1.81" for claude, empty = latest
+	Role          string // "leader" or "member"
 	Skills     []string
 	Hooks      []string
 	FolderName string // directory name
@@ -156,6 +157,9 @@ func ReadDalCue(path, folderName string) (*DalProfile, error) {
 	}
 	if v := val.LookupPath(cue.ParsePath("player")); v.Exists() {
 		p.Player, _ = v.String()
+	}
+	if v := val.LookupPath(cue.ParsePath("player_version")); v.Exists() {
+		p.PlayerVersion, _ = v.String()
 	}
 	if v := val.LookupPath(cue.ParsePath("role")); v.Exists() {
 		p.Role, _ = v.String()
