@@ -132,8 +132,25 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *
 			log.Printf("WARNING: Codex credential not found at %s", credPath)
 		}
 	case "gemini":
-		// Gemini uses API key via environment variable
-		if key := os.Getenv("GEMINI_API_KEY"); key != "" {
+		// Gemini uses API key — resolve from dal.cue (VK:/env:), fallback to host env
+		key := dal.GeminiAPIKey
+		if key != "" {
+			if strings.HasPrefix(key, "VK:") {
+				resolved, err := resolveVeilKey(key)
+				if err != nil {
+					log.Printf("[docker] warning: failed to resolve %s: %v", key, err)
+					key = ""
+				} else {
+					key = resolved
+				}
+			} else if strings.HasPrefix(key, "env:") {
+				key = os.Getenv(strings.TrimPrefix(key, "env:"))
+			}
+		}
+		if key == "" {
+			key = os.Getenv("GEMINI_API_KEY")
+		}
+		if key != "" {
 			args = append(args, "-e", fmt.Sprintf("GEMINI_API_KEY=%s", key))
 		} else {
 			log.Printf("WARNING: GEMINI_API_KEY not set for gemini dal")
