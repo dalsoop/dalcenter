@@ -215,3 +215,73 @@ func TestRunServer(t *testing.T) {
 		t.Fatalf("Run error: %v", err)
 	}
 }
+
+// ── API Auth Tests ──────────────────────────────────────────────
+
+func TestRequireAuth_NoToken_AllowAll(t *testing.T) {
+	d, _ := setupTestDaemon(t)
+	// No apiToken set — all requests allowed
+
+	req := httptest.NewRequest("POST", "/api/sync", nil)
+	w := httptest.NewRecorder()
+	d.requireAuth(d.handleSync)(w, req)
+
+	if w.Code == 401 {
+		t.Fatal("expected no auth required when DALCENTER_TOKEN is empty")
+	}
+}
+
+func TestRequireAuth_WithToken_Rejects(t *testing.T) {
+	d, _ := setupTestDaemon(t)
+	d.apiToken = "secret-token"
+
+	req := httptest.NewRequest("POST", "/api/sync", nil)
+	w := httptest.NewRecorder()
+	d.requireAuth(d.handleSync)(w, req)
+
+	if w.Code != 401 {
+		t.Fatalf("expected 401 without token, got %d", w.Code)
+	}
+}
+
+func TestRequireAuth_WithToken_WrongToken(t *testing.T) {
+	d, _ := setupTestDaemon(t)
+	d.apiToken = "secret-token"
+
+	req := httptest.NewRequest("POST", "/api/sync", nil)
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	w := httptest.NewRecorder()
+	d.requireAuth(d.handleSync)(w, req)
+
+	if w.Code != 401 {
+		t.Fatalf("expected 401 with wrong token, got %d", w.Code)
+	}
+}
+
+func TestRequireAuth_WithToken_CorrectToken(t *testing.T) {
+	d, _ := setupTestDaemon(t)
+	d.apiToken = "secret-token"
+
+	req := httptest.NewRequest("POST", "/api/sync", nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	w := httptest.NewRecorder()
+	d.requireAuth(d.handleSync)(w, req)
+
+	if w.Code == 401 {
+		t.Fatal("expected auth to pass with correct token")
+	}
+}
+
+func TestRequireAuth_ReadEndpoints_NoAuth(t *testing.T) {
+	d, _ := setupTestDaemon(t)
+	d.apiToken = "secret-token"
+
+	// Read endpoint should work without token (not wrapped with requireAuth)
+	req := httptest.NewRequest("GET", "/api/status", nil)
+	w := httptest.NewRecorder()
+	d.handleStatus(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200 for read endpoint without token, got %d", w.Code)
+	}
+}
