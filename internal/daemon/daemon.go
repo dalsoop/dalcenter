@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -29,6 +30,7 @@ type Daemon struct {
 	localdalRoot string
 	serviceRepo  string // service repo path to mount as /workspace
 	mm           *MattermostConfig
+	apiToken     string // Bearer token for write endpoints (empty = no auth)
 	channelID    string // channel for this project
 	containers   map[string]*Container // dal name -> container
 	mu           sync.RWMutex
@@ -48,12 +50,35 @@ type Container struct {
 
 // New creates a daemon.
 func New(addr, localdalRoot, serviceRepo string, mm *MattermostConfig) *Daemon {
+	token := os.Getenv("DALCENTER_TOKEN")
+	if token != "" {
+		log.Println("[daemon] API token auth enabled for write endpoints")
+	}
 	return &Daemon{
 		addr:         addr,
 		localdalRoot: localdalRoot,
 		serviceRepo:  serviceRepo,
 		mm:           mm,
+		apiToken:     token,
 		containers:   make(map[string]*Container),
+	}
+}
+
+// requireAuth is middleware that checks Bearer token for write endpoints.
+// If DALCENTER_TOKEN is not set, all requests are allowed.
+func (d *Daemon) requireAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if d.apiToken == "" {
+			next(w, r)
+			return
+		}
+		auth := r.Header.Get("Authorization")
+		token := strings.TrimPrefix(auth, "Bearer ")
+		if auth == "" || token == auth || token != d.apiToken {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
 	}
 }
 
@@ -90,15 +115,17 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	mux := http.NewServeMux()
 
+	// Read-only endpoints — no auth required
 	mux.HandleFunc("GET /api/ps", d.handlePs)
 	mux.HandleFunc("GET /api/status", d.handleStatus)
 	mux.HandleFunc("GET /api/status/{name}", d.handleStatusOne)
-	mux.HandleFunc("POST /api/wake/{name}", d.handleWake)
-	mux.HandleFunc("POST /api/sleep/{name}", d.handleSleep)
-	mux.HandleFunc("POST /api/sync", d.handleSync)
-	mux.HandleFunc("POST /api/message", d.handleMessage)
 	mux.HandleFunc("POST /api/validate", d.handleValidate)
 	mux.HandleFunc("GET /api/logs/{name}", d.handleLogs)
+	// Write endpoints — require auth when DALCENTER_TOKEN is set
+	mux.HandleFunc("POST /api/wake/{name}", d.requireAuth(d.handleWake))
+	mux.HandleFunc("POST /api/sleep/{name}", d.requireAuth(d.handleSleep))
+	mux.HandleFunc("POST /api/sync", d.requireAuth(d.handleSync))
+	mux.HandleFunc("POST /api/message", d.requireAuth(d.handleMessage))
 
 	srv := &http.Server{Addr: d.addr, Handler: mux}
 	log.Printf("[daemon] listening on %s", d.addr)
