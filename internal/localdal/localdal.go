@@ -28,6 +28,7 @@ type DalProfile struct {
 	GitUser        string
 	GitEmail       string
 	GitHubToken    string // VeilKey ref or raw token
+	GeminiAPIKey   string // VeilKey ref, env: ref, or raw key
 }
 
 // Init initializes a localdal repository at the given path.
@@ -194,6 +195,9 @@ func ReadDalCue(path, folderName string) (*DalProfile, error) {
 	}
 	if v := val.LookupPath(cue.ParsePath("git.github_token")); v.Exists() {
 		p.GitHubToken, _ = v.String()
+	}
+	if v := val.LookupPath(cue.ParsePath("gemini_api_key")); v.Exists() {
+		p.GeminiAPIKey, _ = v.String()
 	}
 	return p, nil
 }
