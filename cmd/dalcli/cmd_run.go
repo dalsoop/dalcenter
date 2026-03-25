@@ -135,9 +135,11 @@ func executeTask(task string) (string, error) {
 
 	var cmd *exec.Cmd
 	if role == "leader" {
-		// Leader needs tool access (Bash) to run dalcli-leader assign.
-		// Pipe task via stdin with full permissions.
-		cmd = exec.Command("claude", "--dangerously-skip-permissions", "-p", task)
+		// Leader needs Bash to run dalcli-leader assign for delegation.
+		// --allowedTools restricts to dalcli-leader commands only.
+		cmd = exec.Command("claude",
+			"--allowedTools", "Bash(dalcli-leader:*) Read Glob Grep",
+			"--print", task)
 	} else {
 		// Members use print mode (read-only analysis).
 		cmd = exec.Command("claude", "-p", task)
