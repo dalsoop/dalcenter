@@ -92,6 +92,9 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *
 		"run", "-d",
 		"--name", containerName,
 		"--hostname", dal.Name,
+		// Linux Docker: host.docker.internal is not available by default.
+		// Add it explicitly pointing to the Docker bridge gateway.
+		"--add-host", "host.docker.internal:host-gateway",
 		// Environment
 		"-e", fmt.Sprintf("DAL_NAME=%s", dal.Name),
 		"-e", fmt.Sprintf("DAL_UUID=%s", dal.UUID),
