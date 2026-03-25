@@ -22,5 +22,7 @@ RUN git config --global credential.helper '!f() { echo username=x-access-token; 
 ENV DAL_ROLE=member
 ENV DAL_PLAYER=claude
 
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+
 WORKDIR /root
-CMD ["sleep", "infinity"]
+CMD ["/usr/local/bin/entrypoint.sh"]
