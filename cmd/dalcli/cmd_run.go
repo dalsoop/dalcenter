@@ -305,7 +305,7 @@ func runClaude(task string) (string, error) {
 	switch player {
 	case "codex":
 		cmd = exec.Command("codex", "exec",
-			"--full-auto",
+			"--dangerously-bypass-approvals-and-sandbox",
 			"-C", "/workspace",
 			task)
 	default: // claude
