@@ -322,8 +322,18 @@ func runClaude(task string) (string, error) {
 
 	cmd.Dir = "/workspace"
 	cmd.Env = append(os.Environ(), "CLAUDE_CODE_ENTRYPOINT=dalcli")
-	out, err := cmd.CombinedOutput()
-	return string(out), err
+
+	// Capture stdout only, discard stderr (prevents codex warnings in output)
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+
+	if stderr.Len() > 0 {
+		log.Printf("[agent] stderr: %s", truncate(stderr.String(), 200))
+	}
+
+	return stdout.String(), err
 }
 
 // isRetryable checks if the error output indicates a rate limit or overload.
