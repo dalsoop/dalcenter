@@ -196,8 +196,51 @@ func isActiveThread(threads *sync.Map, threadID string) bool {
 
 func buildThreadContext(mm *bridge.MattermostBridge, newMsg bridge.Message, dalName string) string {
 	var sb strings.Builder
-	sb.WriteString("너는 Mattermost 스레드에서 팀원과 대화 중이다. ")
-	sb.WriteString("마지막 메시지에 대해 네 역할에 맞게 응답하라.\n\n")
+	sb.WriteString("너는 Mattermost 스레드에서 대화 중이다. ")
+	sb.WriteString("아래는 스레드 전체 대화 내역이다. 마지막 메시지에 대해 응답하라.\n\n")
+
+	// Fetch full thread from MM API
+	threadID := newMsg.RootID
+	if threadID == "" {
+		threadID = newMsg.ID
+	}
+
+	dcURL := os.Getenv("DALCENTER_URL")
+	agentCfg, _ := fetchAgentConfig(dalName)
+	if agentCfg != nil && agentCfg.MMURL != "" && agentCfg.BotToken != "" {
+		url := fmt.Sprintf("%s/api/v4/posts/%s/thread", agentCfg.MMURL, threadID)
+		req, _ := http.NewRequest("GET", url, nil)
+		req.Header.Set("Authorization", "Bearer "+agentCfg.BotToken)
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			var thread struct {
+				Order []string                   `json:"order"`
+				Posts map[string]json.RawMessage `json:"posts"`
+			}
+			if json.Unmarshal(body, &thread) == nil {
+				for _, pid := range thread.Order {
+					var post struct {
+						UserID  string `json:"user_id"`
+						Message string `json:"message"`
+					}
+					if json.Unmarshal(thread.Posts[pid], &post) == nil {
+						role := "상대방"
+						if post.UserID == mm.BotUserID {
+							role = "나(" + dalName + ")"
+						}
+						sb.WriteString(fmt.Sprintf("[%s]: %s\n\n", role, post.Message))
+					}
+				}
+				sb.WriteString(fmt.Sprintf("---\n너의 이름: %s. 위 대화 맥락을 보고 마지막 메시지에 응답하라. 간결하게.", dalName))
+				return sb.String()
+			}
+		}
+	}
+
+	// Fallback: just use the new message
+	_ = dcURL
 	sb.WriteString(fmt.Sprintf("[상대방]: %s\n\n", newMsg.Content))
 	sb.WriteString(fmt.Sprintf("너의 이름: %s. 간결하게 응답.", dalName))
 	return sb.String()
