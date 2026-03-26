@@ -20,6 +20,7 @@ type DalProfile struct {
 	Player        string
 	PlayerVersion string // e.g. "2.1.81" for claude, empty = latest
 	Role          string // "leader" or "member"
+	BudgetMaxTurns int
 	Skills     []string
 	Hooks      []string
 	FolderName string // directory name
@@ -191,6 +192,11 @@ func ReadDalCue(path, folderName string) (*DalProfile, error) {
 			}
 		}
 	}
+	if v := val.LookupPath(cue.ParsePath("budget.max_turns")); v.Exists() {
+		if n, err := v.Int64(); err == nil {
+			p.BudgetMaxTurns = int(n)
+		}
+	}
 	// Git config
 	if v := val.LookupPath(cue.ParsePath("git.user")); v.Exists() {
 		p.GitUser, _ = v.String()
@@ -236,6 +242,9 @@ const defaultSpec = `// dal.spec.cue — localdal schema
 
 #Player: "claude" | "codex" | "gemini"
 #Role:   "leader" | "member"
+#Budget: {
+	max_turns?: int & >0
+}
 
 #DalProfile: {
 	uuid!:    string & != ""
@@ -245,5 +254,6 @@ const defaultSpec = `// dal.spec.cue — localdal schema
 	role!:    #Role
 	skills?:  [...string]
 	hooks?:   [...string]
+	budget?:  #Budget
 }
 `
