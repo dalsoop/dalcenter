@@ -81,6 +81,10 @@ func SetupBot(mmURL, adminToken, teamID, channelID, username, displayName, descr
 		return nil, fmt.Errorf("add to channel: %w", err)
 	}
 
+	// Clean up bot welcome DM ("Please add me to teams and channels...")
+	// Mattermost sends this DM to all team members when a bot is created/enabled.
+	cleanupBotWelcomeDMs(mmURL, adminToken, userID)
+
 	return &BotInfo{
 		UserID:   userID,
 		Username: username,
@@ -317,4 +321,51 @@ func RemoveBotFromChannel(mmURL, adminToken, channelID, botUsername string) {
 		return
 	}
 	mmAPI("DELETE", mmURL+"/api/v4/channels/"+channelID+"/members/"+userID, adminToken, "")
+}
+
+// cleanupBotWelcomeDMs deletes the "Please add me to teams and channels" DM
+// that Mattermost auto-sends when a bot is created or enabled.
+func cleanupBotWelcomeDMs(mmURL, adminToken, botUserID string) {
+	// Get DM channels for this bot
+	data, err := mmAPI("GET", mmURL+"/api/v4/users/"+botUserID+"/channels", adminToken, "")
+	if err != nil {
+		return
+	}
+	var channels []map[string]interface{}
+	if json.Unmarshal(data, &channels) != nil {
+		return
+	}
+	for _, ch := range channels {
+		chType, _ := ch["type"].(string)
+		if chType != "D" {
+			continue
+		}
+		chID, _ := ch["id"].(string)
+		if chID == "" {
+			continue
+		}
+		// Get recent posts in this DM and delete bot's "Please add me" messages
+		postsData, err := mmAPI("GET", mmURL+"/api/v4/channels/"+chID+"/posts?per_page=5", adminToken, "")
+		if err != nil {
+			continue
+		}
+		var posts map[string]interface{}
+		if json.Unmarshal(postsData, &posts) != nil {
+			continue
+		}
+		order, _ := posts["order"].([]interface{})
+		postsMap, _ := posts["posts"].(map[string]interface{})
+		for _, idRaw := range order {
+			id, _ := idRaw.(string)
+			post, _ := postsMap[id].(map[string]interface{})
+			if post == nil {
+				continue
+			}
+			uid, _ := post["user_id"].(string)
+			msg, _ := post["message"].(string)
+			if uid == botUserID && strings.Contains(msg, "Please add me to teams") {
+				mmAPI("DELETE", mmURL+"/api/v4/posts/"+id, adminToken, "")
+			}
+		}
+	}
 }
