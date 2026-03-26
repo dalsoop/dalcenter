@@ -441,15 +441,32 @@ type discoveredContainer struct {
 
 // discoverContainers finds existing dal-* containers (both running and stopped).
 // discoverContainersByUUIDs finds containers matching any of the given UUIDs.
+// Docker --filter label with same key uses AND logic, so we query each UUID separately.
 func discoverContainersByUUIDs(uuids []string) ([]discoveredContainer, error) {
 	if len(uuids) == 0 {
 		return nil, nil
 	}
-	args := []string{"ps", "-a", "--format", "{{.ID}}\t{{.Names}}\t{{.State}}"}
+	var all []discoveredContainer
+	seen := make(map[string]bool)
 	for _, uuid := range uuids {
-		args = append(args, "--filter", "label=dalcenter.uuid="+uuid)
+		containers, err := discoverByLabel("dalcenter.uuid=" + uuid)
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range containers {
+			if !seen[c.ID] {
+				seen[c.ID] = true
+				all = append(all, c)
+			}
+		}
 	}
-	cmd := exec.Command("docker", args...)
+	return all, nil
+}
+
+func discoverByLabel(label string) ([]discoveredContainer, error) {
+	cmd := exec.Command("docker", "ps", "-a",
+		"--filter", "label="+label,
+		"--format", "{{.ID}}\t{{.Names}}\t{{.State}}")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("docker ps: %s: %w", strings.TrimSpace(string(out)), err)
