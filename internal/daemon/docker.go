@@ -242,6 +242,11 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *
 		}
 	}
 
+	// Extra bash tools based on player_version (e.g., "go" image → allow all bash for CI)
+	if dal.PlayerVersion == "go" {
+		args = append(args, "-e", "DAL_EXTRA_BASH=*")
+	}
+
 	args = append(args, image)
 
 	cmd := exec.Command("docker", args...)

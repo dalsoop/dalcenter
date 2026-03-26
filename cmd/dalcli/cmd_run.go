@@ -409,15 +409,24 @@ func runClaude(player, task string) (string, error) {
 			"-C", "/workspace",
 			task)
 	default: // claude
-		if role == "leader" {
-			cmd = exec.Command("claude",
-				"--allowedTools", "Bash(dalcli-leader:*,git:*,gh:*) Read Write Glob Grep Edit",
-				"--print", task)
+		// Build allowed tools based on role and extra permissions
+		var allowedTools string
+		if extra := os.Getenv("DAL_EXTRA_BASH"); extra == "*" {
+			// Unrestricted bash (e.g., verifier running go test)
+			allowedTools = "Bash Read Write Glob Grep Edit"
 		} else {
-			cmd = exec.Command("claude",
-				"--allowedTools", "Bash(git:*,gh:*) Read Write Glob Grep Edit",
-				"--print", task)
+			bashPerms := "git:*,gh:*"
+			if role == "leader" {
+				bashPerms = "dalcli-leader:*,git:*,gh:*"
+			}
+			if extra != "" {
+				bashPerms += "," + extra + ":*"
+			}
+			allowedTools = fmt.Sprintf("Bash(%s) Read Write Glob Grep Edit", bashPerms)
 		}
+		cmd = exec.Command("claude",
+			"--allowedTools", allowedTools,
+			"--print", task)
 	}
 
 	cmd.Dir = "/workspace"
