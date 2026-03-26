@@ -176,6 +176,7 @@ builtin_categories: {
 	skills?: [...string]
 	hooks?:  [...string]
 	exports?: [string]: #AgentExport
+	budget?:  #Budget
 }
 
 // ===== localdal (인형 인스턴스) =====
@@ -245,6 +246,32 @@ builtin_categories: {
 	last_sync_at?: #Timestamp
 	status!:       "synced" | "pending" | "conflict" | "offline"
 	pending_updates?: [...#DalID]
+}
+
+// ===== 예산 가드레일 =====
+
+#BudgetPeriod: "hourly" | "daily" | "weekly" | "monthly"
+#BudgetAction: "warn" | "pause" | "kill"
+
+#BudgetLimit: {
+	max_tokens?:   int & >0
+	max_cost_usd?: number & >0
+	max_requests?: int & >0
+	max_prs?:      int & >0
+	period!:       #BudgetPeriod
+}
+
+#BudgetAlert: {
+	threshold_pct!: int & >=1 & <=100
+	action!:        #BudgetAction
+	notify?:        bool | *true
+}
+
+#Budget: {
+	enabled!:   bool | *true
+	limits!:    #BudgetLimit
+	alerts?: [...#BudgetAlert]
+	hard_stop!: bool | *true // 한도 초과 시 즉시 중단
 }
 
 // ===== 감사 =====
