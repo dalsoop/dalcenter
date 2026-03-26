@@ -177,6 +177,7 @@ builtin_categories: {
 	player!:      "claude" | "codex" | "gemini"
 	description?: string
 	container?: #ContainerSpec
+	budget?: #Budget
 	skills?: [...string]
 	hooks?:  [...string]
 	exports?: [string]: #AgentExport
@@ -252,32 +253,15 @@ builtin_categories: {
 	pending_updates?: [...#DalID]
 }
 
-// ===== 예산 가드레일 =====
-
-#BudgetPeriod: "hourly" | "daily" | "weekly" | "monthly"
-#BudgetAction: "warn" | "pause" | "kill"
-
-#BudgetLimit: {
-	max_tokens?:   int & >0
-	max_cost_usd?: number & >0
-	max_requests?: int & >0
-	max_prs?:      int & >0
-	period!:       #BudgetPeriod
-}
-
-#BudgetAlert: {
-	threshold_pct!: int & >=1 & <=100
-	action!:        #BudgetAction
-	notify?:        bool | *true
-}
+// ===== 예산 =====
 
 #Budget: {
-	enabled!:   bool | *true
-	limits!:    #BudgetLimit
-	alerts?: [...#BudgetAlert]
-	hard_stop!: bool | *true // 한도 초과 시 즉시 중단
+	max_turns?:    int & >0
+	max_cost_usd?: number & >=0
+	action?:       #BudgetAction | *"kill"
 }
 
+#BudgetAction: "warn" | "kill"
 // ===== 감사 =====
 
 #AuditAction: "wake" | "sleep" | "sync" | "update" | "remove" | "create" | "delete"
