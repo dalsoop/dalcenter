@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	// containerPrefix is the naming prefix for dal Docker containers.
-	containerPrefix = "dal-"
+	// containerBasePrefix is the base naming prefix for dal Docker containers.
+	// Full name: containerBasePrefix + team + "-" + instanceName (e.g. dal-vk-leader)
+	containerBasePrefix = "dal-"
 
 	// imagePrefix is the Docker image repository prefix.
 	imagePrefix = "dalcenter/"
@@ -100,7 +101,7 @@ func playerHome(player string) string {
 // It returns the container ID, any credential warnings, and an error.
 func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *localdal.DalProfile) (string, []string, error) {
 	var warnings []string
-	containerName := containerPrefix + instanceName
+	containerName := dalContainerName(instanceName, dal.UUID)
 	tag := "latest"
 	if dal.PlayerVersion != "" {
 		tag = dal.PlayerVersion
@@ -115,11 +116,14 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *
 		"run", "-d",
 		"--name", containerName,
 		"--hostname", dal.Name,
+		// Docker label for UUID-based filtering in reconcile
+		"--label", "dalcenter.uuid=" + dal.UUID,
 		// Linux Docker: host.docker.internal is not available by default.
 		// Add it explicitly pointing to the Docker bridge gateway.
 		"--add-host", dockerHostAlias + ":host-gateway",
 		// Environment
 		"-e", fmt.Sprintf("DAL_NAME=%s", dal.Name),
+		"-e", fmt.Sprintf("DAL_UUID_SHORT=%s", uuidShort(dal.UUID)),
 		"-e", fmt.Sprintf("DAL_UUID=%s", dal.UUID),
 		"-e", fmt.Sprintf("DAL_ROLE=%s", dal.Role),
 		"-e", fmt.Sprintf("DAL_PLAYER=%s", dal.Player),
@@ -210,11 +214,11 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *
 	// Git config from dal.cue or defaults
 	gitUser := dal.GitUser
 	if gitUser == "" {
-		gitUser = containerPrefix + dal.Name
+		gitUser = containerBasePrefix + dal.Name + "-" + uuidShort(dal.UUID)
 	}
 	gitEmail := dal.GitEmail
 	if gitEmail == "" {
-		gitEmail = fmt.Sprintf("%s%s@%s", containerPrefix, dal.Name, defaultGitEmailDomain)
+		gitEmail = fmt.Sprintf("%s%s-%s@%s", containerBasePrefix, dal.Name, uuidShort(dal.UUID), defaultGitEmailDomain)
 	}
 	args = append(args, "-e", fmt.Sprintf("GIT_AUTHOR_NAME=%s", gitUser))
 	args = append(args, "-e", fmt.Sprintf("GIT_AUTHOR_EMAIL=%s", gitEmail))
@@ -239,6 +243,20 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *
 		if token != "" && !strings.HasPrefix(token, "VK:") && !strings.HasPrefix(token, "env:") {
 			args = append(args, "-e", fmt.Sprintf("GITHUB_TOKEN=%s", token))
 			args = append(args, "-e", fmt.Sprintf("GH_TOKEN=%s", token))
+		}
+	}
+
+	// Extra bash tools: unrestricted for leader (needs dalcli-leader, git, etc.)
+	// and for special images like "go" (needs go test, go build, etc.)
+	if dal.Role == "leader" || dal.PlayerVersion == "go" {
+		args = append(args, "-e", "DAL_EXTRA_BASH=*")
+	}
+
+	// Auto task: periodic self-execution
+	if dal.AutoTask != "" {
+		args = append(args, "-e", fmt.Sprintf("DAL_AUTO_TASK=%s", dal.AutoTask))
+		if dal.AutoInterval != "" {
+			args = append(args, "-e", fmt.Sprintf("DAL_AUTO_INTERVAL=%s", dal.AutoInterval))
 		}
 	}
 
@@ -430,9 +448,32 @@ type discoveredContainer struct {
 }
 
 // discoverContainers finds existing dal-* containers (both running and stopped).
-func discoverContainers() ([]discoveredContainer, error) {
+// discoverContainersByUUIDs finds containers matching any of the given UUIDs.
+// Docker --filter label with same key uses AND logic, so we query each UUID separately.
+func discoverContainersByUUIDs(uuids []string) ([]discoveredContainer, error) {
+	if len(uuids) == 0 {
+		return nil, nil
+	}
+	var all []discoveredContainer
+	seen := make(map[string]bool)
+	for _, uuid := range uuids {
+		containers, err := discoverByLabel("dalcenter.uuid=" + uuid)
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range containers {
+			if !seen[c.ID] {
+				seen[c.ID] = true
+				all = append(all, c)
+			}
+		}
+	}
+	return all, nil
+}
+
+func discoverByLabel(label string) ([]discoveredContainer, error) {
 	cmd := exec.Command("docker", "ps", "-a",
-		"--filter", "name="+containerPrefix,
+		"--filter", "label="+label,
 		"--format", "{{.ID}}\t{{.Names}}\t{{.State}}")
 	out, err := cmd.CombinedOutput()
 	if err != nil {

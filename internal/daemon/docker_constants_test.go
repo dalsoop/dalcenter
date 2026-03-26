@@ -7,12 +7,12 @@ import (
 
 // ── Constants sanity checks ─────────────────────────────────────
 
-func TestContainerPrefix(t *testing.T) {
-	if containerPrefix == "" {
-		t.Fatal("containerPrefix must not be empty")
+func TestContainerBasePrefix(t *testing.T) {
+	if containerBasePrefix == "" {
+		t.Fatal("containerBasePrefix must not be empty")
 	}
-	if !strings.HasSuffix(containerPrefix, "-") {
-		t.Fatalf("containerPrefix %q should end with '-'", containerPrefix)
+	if !strings.HasSuffix(containerBasePrefix, "-") {
+		t.Fatalf("containerBasePrefix %q should end with '-'", containerBasePrefix)
 	}
 }
 
@@ -53,7 +53,6 @@ func TestDefaultLogTail(t *testing.T) {
 	if defaultLogTail == "" {
 		t.Fatal("defaultLogTail must not be empty")
 	}
-	// Should be a number
 	for _, c := range defaultLogTail {
 		if c < '0' || c > '9' {
 			t.Fatalf("defaultLogTail %q should be numeric", defaultLogTail)
@@ -70,22 +69,22 @@ func TestDefaultGitEmailDomain(t *testing.T) {
 	}
 }
 
-// ── Container naming ────────────────────────────────────────────
+// ── Container naming with team ──────────────────────────────────
 
 func TestContainerNameFormat(t *testing.T) {
 	tests := []struct {
+		team     string
 		instance string
 		want     string
 	}{
-		{"dev", "dal-dev"},
-		{"leader", "dal-leader"},
-		{"story-checker", "dal-story-checker"},
-		{"art-director", "dal-art-director"},
+		{"vk", "dev", "dal-vk-dev"},
+		{"gaya", "leader", "dal-gaya-leader"},
+		{"dc", "story-checker", "dal-dc-story-checker"},
 	}
 	for _, tt := range tests {
-		got := containerPrefix + tt.instance
+		got := containerBasePrefix + tt.team + "-" + tt.instance
 		if got != tt.want {
-			t.Errorf("containerPrefix + %q = %q, want %q", tt.instance, got, tt.want)
+			t.Errorf("container name team=%q instance=%q = %q, want %q", tt.team, tt.instance, got, tt.want)
 		}
 	}
 }
@@ -110,21 +109,22 @@ func TestImageNameFormat(t *testing.T) {
 	}
 }
 
-// ── Git email format ────────────────────────────────────────────
+// ── Git email format with team ──────────────────────────────────
 
 func TestGitEmailFormat(t *testing.T) {
 	tests := []struct {
+		team    string
 		dalName string
 		want    string
 	}{
-		{"dev", "dal-dev@dalcenter.local"},
-		{"leader", "dal-leader@dalcenter.local"},
-		{"story-checker", "dal-story-checker@dalcenter.local"},
+		{"vk", "dev", "dal-vk-dev@dalcenter.local"},
+		{"gaya", "leader", "dal-gaya-leader@dalcenter.local"},
+		{"dc", "verifier", "dal-dc-verifier@dalcenter.local"},
 	}
 	for _, tt := range tests {
-		got := containerPrefix + tt.dalName + "@" + defaultGitEmailDomain
+		got := containerBasePrefix + tt.team + "-" + tt.dalName + "@" + defaultGitEmailDomain
 		if got != tt.want {
-			t.Errorf("email for %q = %q, want %q", tt.dalName, got, tt.want)
+			t.Errorf("email for team=%q dal=%q = %q, want %q", tt.team, tt.dalName, got, tt.want)
 		}
 	}
 }

@@ -35,6 +35,7 @@ type Daemon struct {
 	containers   map[string]*Container // dal name -> container
 	mu           sync.RWMutex
 	escalations  *escalationStore
+	registry     *Registry
 }
 
 // Container tracks a running dal Docker container.
@@ -63,7 +64,28 @@ func New(addr, localdalRoot, serviceRepo string, mm *MattermostConfig) *Daemon {
 		apiToken:     token,
 		containers:   make(map[string]*Container),
 		escalations:  newEscalationStore(),
+		registry:     newRegistry(serviceRepo),
 	}
+}
+
+// uuidShort returns a 6-char identifier from a UUID for resource naming.
+// Strips hyphens first to avoid ambiguity in container name parsing.
+func uuidShort(uuid string) string {
+	clean := strings.ReplaceAll(uuid, "-", "")
+	if len(clean) > 6 {
+		return clean[:6]
+	}
+	return clean
+}
+
+// dalContainerName returns the Docker container name: dal-{name}-{uuid[:6]}
+func dalContainerName(name, uuid string) string {
+	return containerBasePrefix + name + "-" + uuidShort(uuid)
+}
+
+// dalBotUsername returns the MM bot username: dal-{name}-{uuid[:6]}
+func dalBotUsername(name, uuid string) string {
+	return containerBasePrefix + name + "-" + uuidShort(uuid)
 }
 
 // requireAuth is middleware that checks Bearer token for write endpoints.
@@ -245,7 +267,7 @@ func (d *Daemon) handleWake(w http.ResponseWriter, r *http.Request) {
 	d.mu.Unlock()
 
 	// Clean any stopped container with the same name (best-effort, #33)
-	targetContainerName := containerPrefix + instanceName
+	targetContainerName := dalContainerName(instanceName, dal.UUID)
 	if err := cleanStaleContainer(targetContainerName); err != nil {
 		log.Printf("[daemon] clean stale container %s: %v (continuing)", targetContainerName, err)
 	}
@@ -259,7 +281,7 @@ func (d *Daemon) handleWake(w http.ResponseWriter, r *http.Request) {
 	// Setup Mattermost bot for this dal
 	var botToken string
 	if d.mm != nil && d.mm.URL != "" && d.channelID != "" {
-		botUsername := containerPrefix + dal.Name
+		botUsername := dalBotUsername(dal.Name, dal.UUID)
 		teamID, _, _ := talk.GetTeamAndChannel(d.mm.URL, d.mm.AdminToken, d.mm.TeamName, filepath.Base(d.serviceRepo))
 		bot, err := talk.SetupBot(d.mm.URL, d.mm.AdminToken, teamID, d.channelID, botUsername, dal.Name, fmt.Sprintf("dal %s (%s)", dal.Name, dal.Role))
 		if err != nil {
@@ -282,6 +304,15 @@ func (d *Daemon) handleWake(w http.ResponseWriter, r *http.Request) {
 		BotToken:    botToken,
 	}
 	d.mu.Unlock()
+
+	// Persist to registry
+	d.registry.Set(dal.UUID, RegistryEntry{
+		Name:        instanceName,
+		Repo:        d.serviceRepo,
+		ContainerID: containerID,
+		BotToken:    botToken,
+		Status:      "running",
+	})
 
 	cid := containerID
 	if len(cid) > 12 {
@@ -516,7 +547,14 @@ func mmPost(mmURL, token, path, body string) ([]byte, error) {
 // This is best-effort: running containers with matching dal.cue are added
 // to d.containers; orphans and stopped containers are logged only.
 func (d *Daemon) reconcile() {
-	containers, err := discoverContainers()
+	// Load registry for bot token restoration
+	d.registry.Load()
+
+	// Build a set of known UUIDs from this daemon's .dal/ directory
+	knownUUIDs := d.collectUUIDs()
+
+	// Discover containers that belong to any known UUID
+	containers, err := discoverContainersByUUIDs(knownUUIDs)
 	if err != nil {
 		log.Printf("[daemon] reconcile: %v", err)
 		return
@@ -527,25 +565,37 @@ func (d *Daemon) reconcile() {
 
 	var running, stopped int
 	for _, c := range containers {
-		if !strings.HasPrefix(c.Name, containerPrefix) {
-			continue
-		}
-		instanceName := strings.TrimPrefix(c.Name, containerPrefix)
-
 		if c.Running {
-			// Try to read dal.cue — for multi-instance like "dev-2", derive base name
-			dalName := instanceName
-			dal, err := localdal.ReadDalCue(d.dalCuePath(dalName), dalName)
+			// Find dal name from registry or container name
+			entry := d.registry.GetByContainerID(c.ID)
+			instanceName := ""
+			if entry != nil {
+				instanceName = entry.Name
+			} else {
+				// Derive from container name: dal-{name}-{uuid[:6]} → {name}
+				instanceName = extractInstanceName(c.Name)
+			}
+			if instanceName == "" {
+				log.Printf("[daemon] reconcile: orphan container %s (%s)", c.Name, c.ID[:12])
+				continue
+			}
+
+			dal, err := localdal.ReadDalCue(d.dalCuePath(instanceName), instanceName)
 			if err != nil {
 				// Try stripping instance suffix: "dev-2" -> "dev"
-				if idx := strings.LastIndex(dalName, "-"); idx > 0 {
-					baseName := dalName[:idx]
+				if idx := strings.LastIndex(instanceName, "-"); idx > 0 {
+					baseName := instanceName[:idx]
 					dal, err = localdal.ReadDalCue(d.dalCuePath(baseName), baseName)
 				}
 			}
 			if err != nil {
 				log.Printf("[daemon] reconcile: orphan running container %s (%s) — no matching dal.cue", c.Name, c.ID[:12])
 				continue
+			}
+
+			botToken := ""
+			if entry != nil {
+				botToken = entry.BotToken
 			}
 
 			d.mu.Lock()
@@ -557,6 +607,7 @@ func (d *Daemon) reconcile() {
 				ContainerID: c.ID,
 				Status:      "running",
 				Skills:      len(dal.Skills),
+				BotToken:    botToken,
 			}
 			d.mu.Unlock()
 			running++
@@ -570,6 +621,36 @@ func (d *Daemon) reconcile() {
 	if running > 0 || stopped > 0 {
 		log.Printf("[daemon] reconcile: found %d running, %d stopped dal containers", running, stopped)
 	}
+}
+
+// collectUUIDs reads all dal.cue files and returns their UUIDs.
+func (d *Daemon) collectUUIDs() []string {
+	entries, err := os.ReadDir(d.localdalRoot)
+	if err != nil {
+		return nil
+	}
+	var uuids []string
+	for _, e := range entries {
+		if !e.IsDir() || e.Name() == "skills" || e.Name() == "hooks" {
+			continue
+		}
+		dal, err := localdal.ReadDalCue(d.dalCuePath(e.Name()), e.Name())
+		if err != nil {
+			continue
+		}
+		uuids = append(uuids, dal.UUID)
+	}
+	return uuids
+}
+
+// extractInstanceName derives the dal name from container name: dal-{name}-{uuid[:6]}
+func extractInstanceName(containerName string) string {
+	s := strings.TrimPrefix(containerName, containerBasePrefix)
+	// Remove last segment (uuid[:6]): "leader-a1b2c3" → "leader"
+	if idx := strings.LastIndex(s, "-"); idx > 0 {
+		return s[:idx]
+	}
+	return s
 }
 
 // handleAgentConfig returns MM connection info for a dal to run its agent loop.
@@ -586,6 +667,7 @@ func (d *Daemon) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
 
 	resp := map[string]string{
 		"dal_name":   c.DalName,
+		"uuid":       c.UUID,
 		"bot_token":  c.BotToken,
 		"channel_id": d.channelID,
 	}
