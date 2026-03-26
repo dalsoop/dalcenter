@@ -192,6 +192,10 @@ func runAgentLoop(dalName string) error {
 				})
 				escalateToHost(dalName, prompt, output, string(class))
 				daemon.DispatchTaskFailed(dalName, truncate(prompt, 200), err.Error(), len(output))
+				// Auto-claim for environment/blocked issues
+				if class == ErrClassEnv || class == ErrClassDeps {
+					autoFileClaim(dalName, class, prompt, output)
+				}
 				continue
 			}
 		}
