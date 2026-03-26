@@ -1,0 +1,22 @@
+## 검증 결과 — 2026-03-26
+
+| 항목 | 결과 | 비고 |
+|------|------|------|
+| go vet | PASS | 경고/에러 없음 |
+| go test | PASS (6/6) | 28.8s total, 1 package without test files |
+| go build (dalcenter) | PASS | |
+| go build (dalcli) | PASS | |
+| .dal/ validate | SKIP | .dal/ 디렉토리 미존재 (dal.cue 파일 없음) |
+
+### 테스트 상세
+
+  cmd/dalcli          28.434s  PASS
+  cmd/dalcli-leader    0.013s  PASS
+  internal/bridge      0.178s  PASS
+  internal/daemon      0.129s  PASS
+  internal/localdal    0.017s  PASS
+  internal/talk        0.011s  PASS
+  cmd/dalcenter        (no test files)
+
+### 실패 상세
+없음 — 모든 항목 PASS
