@@ -1,9 +1,9 @@
-uuid:    "dc-reviewer-20260326"
-name:    "dc-reviewer"
+uuid:    "dev-20260326"
+name:    "dev"
 version: "1.0.0"
-player:  "codex"
+player:  "claude"
 role:    "member"
-skills:  ["skills/go-review", "skills/security-audit", "skills/docker-ops"]
+skills:  ["skills/go-review", "skills/docker-ops", "skills/mattermost-api", "skills/cue-schema"]
 hooks:   []
 git: {
     user:         "dal-${name}"

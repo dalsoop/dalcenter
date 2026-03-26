@@ -1,5 +1,5 @@
-uuid:           "dc-verifier-20260326"
-name:           "dc-verifier"
+uuid:           "verifier-20260326"
+name:           "verifier"
 version:        "1.0.0"
 player:         "claude"
 player_version: "go"

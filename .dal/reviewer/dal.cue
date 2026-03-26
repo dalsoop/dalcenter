@@ -1,9 +1,9 @@
-uuid:    "dc-tester-20260326"
-name:    "dc-tester"
+uuid:    "reviewer-20260326"
+name:    "reviewer"
 version: "1.0.0"
-player:  "claude"
+player:  "codex"
 role:    "member"
-skills:  ["skills/go-review", "skills/test-strategy", "skills/docker-ops"]
+skills:  ["skills/go-review", "skills/security-audit", "skills/docker-ops"]
 hooks:   []
 git: {
     user:         "dal-${name}"

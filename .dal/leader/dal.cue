@@ -1,5 +1,5 @@
-uuid:    "dc-leader-20260326"
-name:    "dc-leader"
+uuid:    "leader-20260326"
+name:    "leader"
 version: "1.0.0"
 player:  "claude"
 role:    "leader"
