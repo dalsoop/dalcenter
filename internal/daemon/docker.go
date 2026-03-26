@@ -242,8 +242,9 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *
 		}
 	}
 
-	// Extra bash tools based on player_version (e.g., "go" image → allow all bash for CI)
-	if dal.PlayerVersion == "go" {
+	// Extra bash tools: unrestricted for leader (needs dalcli-leader, git, etc.)
+	// and for special images like "go" (needs go test, go build, etc.)
+	if dal.Role == "leader" || dal.PlayerVersion == "go" {
 		args = append(args, "-e", "DAL_EXTRA_BASH=*")
 	}
 

@@ -1,5 +1,6 @@
 # Build artifacts
 /dalcenter
 /dalcli
+/dalcli-leader
 dist/
 dalcenter-test/
