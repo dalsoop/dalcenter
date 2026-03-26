@@ -415,6 +415,16 @@ func TestFormatBudgetExceededMessage(t *testing.T) {
 	}
 }
 
+func TestFormatTurnLimitExceededMessage(t *testing.T) {
+	msg := formatTurnLimitExceededMessage(5, 4)
+	if !strings.Contains(msg, "max_turns 초과") {
+		t.Fatalf("message = %q", msg)
+	}
+	if !strings.Contains(msg, "(5/4)") {
+		t.Fatalf("message = %q", msg)
+	}
+}
+
 // ── executeTask role branching (verify command construction) ──
 
 func TestExecuteTask_RoleBranching(t *testing.T) {
