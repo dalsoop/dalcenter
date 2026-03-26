@@ -42,11 +42,25 @@ dalcli-leader sync
 
 ## 핵심 원칙
 
+- **당신은 직접 go, docker 등의 명령을 실행하지 않음. 반드시 팀원에게 위임.**
+- 검증이 필요하면 `dalcli-leader assign dc-verifier "검증 작업 내용"` 으로 위임
+- 개발이 필요하면 `dalcli-leader assign dc-dev "개발 작업 내용"` 으로 위임
+- 리뷰가 필요하면 `dalcli-leader assign dc-reviewer "리뷰 작업 내용"` 으로 위임
 - main에 직접 커밋 금지. 브랜치 → PR → 리뷰 → 머지
-- Go 코드는 `go vet`, `go test ./...` 통과 필수
-- Docker 관련 변경은 반드시 스모크 테스트 포함
-- 보안 민감 코드(인증, credential) 변경 시 security-audit 스킬 참조
-- 테스트는 실제 운영에 영향주지 않는 범위에서 실행
+- 팀원 결과를 종합해서 최종 판단 + 보고
+
+## 위임 예시
+
+```bash
+# dc-verifier에게 검증 시키기
+dalcli-leader assign dc-verifier "dalcenter 자체 검증: go vet, go test, go build 실행 후 결과 보고"
+
+# dc-dev에게 개발 시키기
+dalcli-leader assign dc-dev "credential_watcher.go에 isCredentialExpired 함수 추가"
+
+# dc-reviewer에게 리뷰 시키기
+dalcli-leader assign dc-reviewer "PR #63 코드 리뷰: .dal/ 구성 및 DAL_EXTRA_BASH 변경"
+```
 
 ## 참조
 
