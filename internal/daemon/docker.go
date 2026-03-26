@@ -99,9 +99,9 @@ func playerHome(player string) string {
 
 // dockerRun creates and starts a Docker container for a dal.
 // It returns the container ID, any credential warnings, and an error.
-func dockerRun(team, localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *localdal.DalProfile) (string, []string, error) {
+func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *localdal.DalProfile) (string, []string, error) {
 	var warnings []string
-	containerName := containerBasePrefix + team + "-" + instanceName
+	containerName := dalContainerName(instanceName, dal.UUID)
 	tag := "latest"
 	if dal.PlayerVersion != "" {
 		tag = dal.PlayerVersion
@@ -116,14 +116,14 @@ func dockerRun(team, localdalRoot, serviceRepo, instanceName, daemonAddr string,
 		"run", "-d",
 		"--name", containerName,
 		"--hostname", dal.Name,
-		// Docker label for team-based filtering in reconcile
-		"--label", "dalcenter.team=" + team,
+		// Docker label for UUID-based filtering in reconcile
+		"--label", "dalcenter.uuid=" + dal.UUID,
 		// Linux Docker: host.docker.internal is not available by default.
 		// Add it explicitly pointing to the Docker bridge gateway.
 		"--add-host", dockerHostAlias + ":host-gateway",
 		// Environment
 		"-e", fmt.Sprintf("DAL_NAME=%s", dal.Name),
-		"-e", fmt.Sprintf("DAL_TEAM=%s", team),
+		"-e", fmt.Sprintf("DAL_UUID_SHORT=%s", uuidShort(dal.UUID)),
 		"-e", fmt.Sprintf("DAL_UUID=%s", dal.UUID),
 		"-e", fmt.Sprintf("DAL_ROLE=%s", dal.Role),
 		"-e", fmt.Sprintf("DAL_PLAYER=%s", dal.Player),
@@ -214,11 +214,11 @@ func dockerRun(team, localdalRoot, serviceRepo, instanceName, daemonAddr string,
 	// Git config from dal.cue or defaults
 	gitUser := dal.GitUser
 	if gitUser == "" {
-		gitUser = containerBasePrefix + team + "-" + dal.Name
+		gitUser = containerBasePrefix + dal.Name + "-" + uuidShort(dal.UUID)
 	}
 	gitEmail := dal.GitEmail
 	if gitEmail == "" {
-		gitEmail = fmt.Sprintf("%s%s-%s@%s", containerBasePrefix, team, dal.Name, defaultGitEmailDomain)
+		gitEmail = fmt.Sprintf("%s%s-%s@%s", containerBasePrefix, dal.Name, uuidShort(dal.UUID), defaultGitEmailDomain)
 	}
 	args = append(args, "-e", fmt.Sprintf("GIT_AUTHOR_NAME=%s", gitUser))
 	args = append(args, "-e", fmt.Sprintf("GIT_AUTHOR_EMAIL=%s", gitEmail))
@@ -440,10 +440,16 @@ type discoveredContainer struct {
 }
 
 // discoverContainers finds existing dal-* containers (both running and stopped).
-func discoverContainers(team string) ([]discoveredContainer, error) {
-	cmd := exec.Command("docker", "ps", "-a",
-		"--filter", "label=dalcenter.team="+team,
-		"--format", "{{.ID}}\t{{.Names}}\t{{.State}}")
+// discoverContainersByUUIDs finds containers matching any of the given UUIDs.
+func discoverContainersByUUIDs(uuids []string) ([]discoveredContainer, error) {
+	if len(uuids) == 0 {
+		return nil, nil
+	}
+	args := []string{"ps", "-a", "--format", "{{.ID}}\t{{.Names}}\t{{.State}}"}
+	for _, uuid := range uuids {
+		args = append(args, "--filter", "label=dalcenter.uuid="+uuid)
+	}
+	cmd := exec.Command("docker", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("docker ps: %s: %w", strings.TrimSpace(string(out)), err)

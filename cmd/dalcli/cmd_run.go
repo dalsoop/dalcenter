@@ -55,10 +55,10 @@ func runAgentLoop(dalName string) error {
 
 	log.Printf("[agent] listening...")
 
-	team := os.Getenv("DAL_TEAM")
+	uuidShort := os.Getenv("DAL_UUID_SHORT")
 	var mention string
-	if team != "" {
-		mention = fmt.Sprintf("@dal-%s-%s", team, dalName)
+	if uuidShort != "" {
+		mention = fmt.Sprintf("@dal-%s-%s", dalName, uuidShort)
 	} else {
 		mention = fmt.Sprintf("@dal-%s", dalName)
 	}

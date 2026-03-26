@@ -174,12 +174,19 @@ func assignCmd(dalName string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			team := os.Getenv("DAL_TEAM")
+			// Find target dal's UUID from ps to construct mention
+			targetName := args[0]
 			var targetMention string
-			if team != "" {
-				targetMention = fmt.Sprintf("@dal-%s-%s", team, args[0])
-			} else {
-				targetMention = fmt.Sprintf("@dal-%s", args[0])
+			if containers, err := client.Ps(); err == nil {
+				for _, c := range containers {
+					if c.DalName == targetName && c.UUID != "" && len(c.UUID) > 6 {
+						targetMention = fmt.Sprintf("@dal-%s-%s", targetName, c.UUID[:6])
+						break
+					}
+				}
+			}
+			if targetMention == "" {
+				targetMention = fmt.Sprintf("@dal-%s", targetName)
 			}
 			msg := fmt.Sprintf("%s 작업 지시: %s", targetMention, args[1])
 			result, err := client.Message(dalName, msg)
