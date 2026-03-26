@@ -64,7 +64,7 @@ func New(addr, localdalRoot, serviceRepo string, mm *MattermostConfig) *Daemon {
 		apiToken:     token,
 		containers:   make(map[string]*Container),
 		escalations:  newEscalationStore(),
-		registry:     newRegistry(),
+		registry:     newRegistry(serviceRepo),
 	}
 }
 

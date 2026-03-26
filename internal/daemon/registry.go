@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"log"
 	"os"
@@ -24,12 +26,16 @@ type Registry struct {
 	mu      sync.RWMutex
 }
 
-func newRegistry() *Registry {
+func newRegistry(serviceRepo string) *Registry {
 	home, _ := os.UserHomeDir()
 	dir := filepath.Join(home, ".dalcenter")
 	os.MkdirAll(dir, 0700)
+
+	h := sha256.Sum256([]byte(serviceRepo))
+	hash := hex.EncodeToString(h[:])[:8]
+
 	return &Registry{
-		path:    filepath.Join(dir, "registry.json"),
+		path:    filepath.Join(dir, "registry-"+hash+".json"),
 		entries: make(map[string]*RegistryEntry),
 	}
 }
