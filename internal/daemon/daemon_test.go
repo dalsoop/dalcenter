@@ -43,7 +43,7 @@ hooks:   []
 `), 0644)
 	os.WriteFile(filepath.Join(devDir, "instructions.md"), []byte("# Dev\n"), 0644)
 
-	d := New(":0", root, "", nil)
+	d := New("test", ":0", root, "", nil)
 	return d, root
 }
 

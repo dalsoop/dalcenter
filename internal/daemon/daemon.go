@@ -26,6 +26,7 @@ type MattermostConfig struct {
 
 // Daemon is the dalcenter HTTP API server.
 type Daemon struct {
+	team         string // team identifier for instance isolation
 	addr         string
 	localdalRoot string
 	serviceRepo  string // service repo path to mount as /workspace
@@ -35,6 +36,7 @@ type Daemon struct {
 	containers   map[string]*Container // dal name -> container
 	mu           sync.RWMutex
 	escalations  *escalationStore
+	botTokens    *botTokenStore
 }
 
 // Container tracks a running dal Docker container.
@@ -49,13 +51,15 @@ type Container struct {
 	BotToken    string `json:"-"` // Mattermost bot token
 }
 
-// New creates a daemon.
-func New(addr, localdalRoot, serviceRepo string, mm *MattermostConfig) *Daemon {
+// New creates a daemon. team is a short identifier (1-8 chars, [a-z0-9-])
+// used to isolate Docker containers and Mattermost bots across instances.
+func New(team, addr, localdalRoot, serviceRepo string, mm *MattermostConfig) *Daemon {
 	token := os.Getenv("DALCENTER_TOKEN")
 	if token != "" {
 		log.Println("[daemon] API token auth enabled for write endpoints")
 	}
 	return &Daemon{
+		team:         team,
 		addr:         addr,
 		localdalRoot: localdalRoot,
 		serviceRepo:  serviceRepo,
@@ -63,7 +67,18 @@ func New(addr, localdalRoot, serviceRepo string, mm *MattermostConfig) *Daemon {
 		apiToken:     token,
 		containers:   make(map[string]*Container),
 		escalations:  newEscalationStore(),
+		botTokens:    newBotTokenStore(team),
 	}
+}
+
+// ContainerName returns the Docker container name for a dal instance.
+func (d *Daemon) ContainerName(instanceName string) string {
+	return containerBasePrefix + d.team + "-" + instanceName
+}
+
+// BotUsername returns the Mattermost bot username for a dal.
+func (d *Daemon) BotUsername(dalName string) string {
+	return containerBasePrefix + d.team + "-" + dalName
 }
 
 // requireAuth is middleware that checks Bearer token for write endpoints.
@@ -245,12 +260,12 @@ func (d *Daemon) handleWake(w http.ResponseWriter, r *http.Request) {
 	d.mu.Unlock()
 
 	// Clean any stopped container with the same name (best-effort, #33)
-	targetContainerName := containerPrefix + instanceName
+	targetContainerName := d.ContainerName(instanceName)
 	if err := cleanStaleContainer(targetContainerName); err != nil {
 		log.Printf("[daemon] clean stale container %s: %v (continuing)", targetContainerName, err)
 	}
 
-	containerID, warnings, err := dockerRun(d.localdalRoot, d.serviceRepo, instanceName, d.addr, dal)
+	containerID, warnings, err := dockerRun(d.team, d.localdalRoot, d.serviceRepo, instanceName, d.addr, dal)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("wake failed: %v", err), 500)
 		return
@@ -259,7 +274,7 @@ func (d *Daemon) handleWake(w http.ResponseWriter, r *http.Request) {
 	// Setup Mattermost bot for this dal
 	var botToken string
 	if d.mm != nil && d.mm.URL != "" && d.channelID != "" {
-		botUsername := containerPrefix + dal.Name
+		botUsername := d.BotUsername(dal.Name)
 		teamID, _, _ := talk.GetTeamAndChannel(d.mm.URL, d.mm.AdminToken, d.mm.TeamName, filepath.Base(d.serviceRepo))
 		bot, err := talk.SetupBot(d.mm.URL, d.mm.AdminToken, teamID, d.channelID, botUsername, dal.Name, fmt.Sprintf("dal %s (%s)", dal.Name, dal.Role))
 		if err != nil {
@@ -282,6 +297,11 @@ func (d *Daemon) handleWake(w http.ResponseWriter, r *http.Request) {
 		BotToken:    botToken,
 	}
 	d.mu.Unlock()
+
+	// Persist bot token for reconcile
+	if botToken != "" {
+		d.botTokens.Set(instanceName, botToken)
+	}
 
 	cid := containerID
 	if len(cid) > 12 {
@@ -369,7 +389,7 @@ func (d *Daemon) handleSync(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			// Start new container
-			newID, _, err := dockerRun(d.localdalRoot, d.serviceRepo, name, d.addr, dal)
+			newID, _, err := dockerRun(d.team, d.localdalRoot, d.serviceRepo, name, d.addr, dal)
 			if err != nil {
 				log.Printf("[daemon] sync restart run %s: %v", name, err)
 				// Remove from containers map since old one is stopped
@@ -516,7 +536,10 @@ func mmPost(mmURL, token, path, body string) ([]byte, error) {
 // This is best-effort: running containers with matching dal.cue are added
 // to d.containers; orphans and stopped containers are logged only.
 func (d *Daemon) reconcile() {
-	containers, err := discoverContainers()
+	// Load persisted bot tokens
+	d.botTokens.Load()
+
+	containers, err := discoverContainers(d.team)
 	if err != nil {
 		log.Printf("[daemon] reconcile: %v", err)
 		return
@@ -525,12 +548,13 @@ func (d *Daemon) reconcile() {
 		return
 	}
 
+	prefix := containerBasePrefix + d.team + "-"
 	var running, stopped int
 	for _, c := range containers {
-		if !strings.HasPrefix(c.Name, containerPrefix) {
+		if !strings.HasPrefix(c.Name, prefix) {
 			continue
 		}
-		instanceName := strings.TrimPrefix(c.Name, containerPrefix)
+		instanceName := strings.TrimPrefix(c.Name, prefix)
 
 		if c.Running {
 			// Try to read dal.cue — for multi-instance like "dev-2", derive base name
@@ -557,6 +581,7 @@ func (d *Daemon) reconcile() {
 				ContainerID: c.ID,
 				Status:      "running",
 				Skills:      len(dal.Skills),
+				BotToken:    d.botTokens.Get(instanceName),
 			}
 			d.mu.Unlock()
 			running++
@@ -588,6 +613,7 @@ func (d *Daemon) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
 		"dal_name":   c.DalName,
 		"bot_token":  c.BotToken,
 		"channel_id": d.channelID,
+		"team":       d.team,
 	}
 	if d.mm != nil {
 		resp["mm_url"] = d.mm.URL

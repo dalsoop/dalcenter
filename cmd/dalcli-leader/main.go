@@ -174,7 +174,14 @@ func assignCmd(dalName string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			msg := fmt.Sprintf("@dal-%s 작업 지시: %s", args[0], args[1])
+			team := os.Getenv("DAL_TEAM")
+			var targetMention string
+			if team != "" {
+				targetMention = fmt.Sprintf("@dal-%s-%s", team, args[0])
+			} else {
+				targetMention = fmt.Sprintf("@dal-%s", args[0])
+			}
+			msg := fmt.Sprintf("%s 작업 지시: %s", targetMention, args[1])
 			result, err := client.Message(dalName, msg)
 			if err != nil {
 				return err

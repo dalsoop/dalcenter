@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	// containerPrefix is the naming prefix for dal Docker containers.
-	containerPrefix = "dal-"
+	// containerBasePrefix is the base naming prefix for dal Docker containers.
+	// Full name: containerBasePrefix + team + "-" + instanceName (e.g. dal-vk-leader)
+	containerBasePrefix = "dal-"
 
 	// imagePrefix is the Docker image repository prefix.
 	imagePrefix = "dalcenter/"
@@ -98,9 +99,9 @@ func playerHome(player string) string {
 
 // dockerRun creates and starts a Docker container for a dal.
 // It returns the container ID, any credential warnings, and an error.
-func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *localdal.DalProfile) (string, []string, error) {
+func dockerRun(team, localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *localdal.DalProfile) (string, []string, error) {
 	var warnings []string
-	containerName := containerPrefix + instanceName
+	containerName := containerBasePrefix + team + "-" + instanceName
 	tag := "latest"
 	if dal.PlayerVersion != "" {
 		tag = dal.PlayerVersion
@@ -115,11 +116,14 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *
 		"run", "-d",
 		"--name", containerName,
 		"--hostname", dal.Name,
+		// Docker label for team-based filtering in reconcile
+		"--label", "dalcenter.team=" + team,
 		// Linux Docker: host.docker.internal is not available by default.
 		// Add it explicitly pointing to the Docker bridge gateway.
 		"--add-host", dockerHostAlias + ":host-gateway",
 		// Environment
 		"-e", fmt.Sprintf("DAL_NAME=%s", dal.Name),
+		"-e", fmt.Sprintf("DAL_TEAM=%s", team),
 		"-e", fmt.Sprintf("DAL_UUID=%s", dal.UUID),
 		"-e", fmt.Sprintf("DAL_ROLE=%s", dal.Role),
 		"-e", fmt.Sprintf("DAL_PLAYER=%s", dal.Player),
@@ -210,11 +214,11 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *
 	// Git config from dal.cue or defaults
 	gitUser := dal.GitUser
 	if gitUser == "" {
-		gitUser = containerPrefix + dal.Name
+		gitUser = containerBasePrefix + team + "-" + dal.Name
 	}
 	gitEmail := dal.GitEmail
 	if gitEmail == "" {
-		gitEmail = fmt.Sprintf("%s%s@%s", containerPrefix, dal.Name, defaultGitEmailDomain)
+		gitEmail = fmt.Sprintf("%s%s-%s@%s", containerBasePrefix, team, dal.Name, defaultGitEmailDomain)
 	}
 	args = append(args, "-e", fmt.Sprintf("GIT_AUTHOR_NAME=%s", gitUser))
 	args = append(args, "-e", fmt.Sprintf("GIT_AUTHOR_EMAIL=%s", gitEmail))
@@ -436,9 +440,9 @@ type discoveredContainer struct {
 }
 
 // discoverContainers finds existing dal-* containers (both running and stopped).
-func discoverContainers() ([]discoveredContainer, error) {
+func discoverContainers(team string) ([]discoveredContainer, error) {
 	cmd := exec.Command("docker", "ps", "-a",
-		"--filter", "name="+containerPrefix,
+		"--filter", "label=dalcenter.team="+team,
 		"--format", "{{.ID}}\t{{.Names}}\t{{.State}}")
 	out, err := cmd.CombinedOutput()
 	if err != nil {

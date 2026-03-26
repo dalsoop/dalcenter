@@ -26,11 +26,14 @@ func localdalRoot() string {
 // --- serve ---
 
 func newServeCmd() *cobra.Command {
-	var addr, serviceRepo, mmURL, mmToken, mmTeam string
+	var addr, serviceRepo, mmURL, mmToken, mmTeam, team string
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run dalcenter daemon (HTTP API + Docker management)",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if team == "" {
+				return fmt.Errorf("--team is required (e.g. --team vk, --team gaya)")
+			}
 			root := localdalRoot()
 			var mm *daemon.MattermostConfig
 			if mmURL != "" {
@@ -40,7 +43,7 @@ func newServeCmd() *cobra.Command {
 					TeamName:   mmTeam,
 				}
 			}
-			d := daemon.New(addr, root, serviceRepo, mm)
+			d := daemon.New(team, addr, root, serviceRepo, mm)
 
 			ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer cancel()
@@ -48,6 +51,7 @@ func newServeCmd() *cobra.Command {
 			return d.Run(ctx)
 		},
 	}
+	cmd.Flags().StringVar(&team, "team", os.Getenv("DALCENTER_TEAM"), "Team identifier for instance isolation (required, e.g. vk, gaya, dc)")
 	cmd.Flags().StringVar(&addr, "addr", ":11190", "Listen address")
 	cmd.Flags().StringVar(&serviceRepo, "repo", "", "Service repository path to mount as /workspace")
 	cmd.Flags().StringVar(&mmURL, "mm-url", os.Getenv("DALCENTER_MM_URL"), "Mattermost URL")

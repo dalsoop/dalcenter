@@ -55,7 +55,13 @@ func runAgentLoop(dalName string) error {
 
 	log.Printf("[agent] listening...")
 
-	mention := fmt.Sprintf("@dal-%s", dalName)
+	team := os.Getenv("DAL_TEAM")
+	var mention string
+	if team != "" {
+		mention = fmt.Sprintf("@dal-%s-%s", team, dalName)
+	} else {
+		mention = fmt.Sprintf("@dal-%s", dalName)
+	}
 	var activeThreads sync.Map
 
 	for msg := range mm.Listen() {
