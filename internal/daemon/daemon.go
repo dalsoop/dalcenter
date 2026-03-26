@@ -373,6 +373,11 @@ func (d *Daemon) handleSleep(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Remove bot from channel on sleep (prevent zombie bots)
+	if d.mm != nil && d.mm.URL != "" && d.channelID != "" && c.BotUsername != "" {
+		talk.RemoveBotFromChannel(d.mm.URL, d.mm.AdminToken, d.channelID, c.BotUsername)
+	}
+
 	d.mu.Lock()
 	c.Status = "stopped"
 	delete(d.containers, name)

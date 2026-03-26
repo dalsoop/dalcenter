@@ -308,3 +308,13 @@ func jsonStr(data []byte, key string) string {
 	}
 	return ""
 }
+
+// RemoveBotFromChannel removes a bot user from a Mattermost channel.
+func RemoveBotFromChannel(mmURL, adminToken, channelID, botUsername string) {
+	mmURL = strings.TrimRight(mmURL, "/")
+	userID := findExistingBotUserID(mmURL, adminToken, botUsername)
+	if userID == "" {
+		return
+	}
+	mmAPI("DELETE", mmURL+"/api/v4/channels/"+channelID+"/members/"+userID, adminToken, "")
+}
