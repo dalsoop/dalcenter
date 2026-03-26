@@ -27,6 +27,7 @@ func main() {
 		newTaskCmd(),
 		newTaskStatusCmd(),
 		newTaskListCmd(),
+		newClaimsCmd(),
 		newImageCmd(),
 	)
 

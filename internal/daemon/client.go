@@ -163,6 +163,76 @@ func (c *Client) postAny(path string) (map[string]any, error) {
 	return result, nil
 }
 
+// ClaimResult holds the response from submitting a claim.
+type ClaimResult struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+}
+
+// Claim submits feedback from a dal to the host.
+func (c *Client) Claim(dal, claimType, title, detail, ctx string) (*ClaimResult, error) {
+	body := fmt.Sprintf(`{"dal":%q,"type":%q,"title":%q,"detail":%q,"context":%q}`,
+		dal, claimType, title, detail, ctx)
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/claim", strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("daemon unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("claim failed: %s", strings.TrimSpace(string(b)))
+	}
+	var result ClaimResult
+	json.Unmarshal(b, &result)
+	return &result, nil
+}
+
+// Claims lists claims with optional status filter.
+func (c *Client) Claims(status string) ([]Claim, error) {
+	url := c.baseURL + "/api/claims"
+	if status != "" {
+		url += "?status=" + status
+	}
+	resp, err := c.http.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("daemon unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Claims []Claim `json:"claims"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+	return result.Claims, nil
+}
+
+// ClaimRespond responds to a claim (host action).
+func (c *Client) ClaimRespond(id, status, response string) error {
+	body := fmt.Sprintf(`{"status":%q,"response":%q}`, status, response)
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/claims/"+id+"/respond", strings.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiToken)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("daemon unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("respond failed: %s", strings.TrimSpace(string(b)))
+	}
+	return nil
+}
+
 // TaskResult holds the response from a direct task execution.
 type TaskResult struct {
 	ID     string `json:"task_id,omitempty"`

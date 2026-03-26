@@ -35,6 +35,7 @@ type Daemon struct {
 	containers   map[string]*Container // dal name -> container
 	mu           sync.RWMutex
 	escalations  *escalationStore
+	claims       *claimStore
 	tasks        *taskStore
 	registry     *Registry
 }
@@ -65,6 +66,7 @@ func New(addr, localdalRoot, serviceRepo string, mm *MattermostConfig) *Daemon {
 		apiToken:     token,
 		containers:   make(map[string]*Container),
 		escalations:  newEscalationStore(),
+		claims:       newClaimStore(),
 		tasks:        newTaskStore(),
 		registry:     newRegistry(serviceRepo),
 	}
@@ -160,6 +162,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /api/task", d.requireAuth(d.handleTask))
 	mux.HandleFunc("GET /api/task/{id}", d.handleTaskStatus)
 	mux.HandleFunc("GET /api/tasks", d.handleTaskList)
+	// Claims — dal feedback to host
+	mux.HandleFunc("POST /api/claim", d.handleClaim)
+	mux.HandleFunc("GET /api/claims", d.handleClaims)
+	mux.HandleFunc("GET /api/claims/{id}", d.handleClaimGet)
+	mux.HandleFunc("POST /api/claims/{id}/respond", d.requireAuth(d.handleClaimRespond))
 	// Escalation endpoints
 	mux.HandleFunc("POST /api/escalate", d.requireAuth(d.handleEscalate))
 	mux.HandleFunc("GET /api/escalations", d.handleEscalations)

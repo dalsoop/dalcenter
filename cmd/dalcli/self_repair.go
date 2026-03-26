@@ -173,6 +173,49 @@ func selfRepair(task, output string, taskErr error) (shouldRetry bool, fix strin
 	return false, ""
 }
 
+// autoFileClaim creates a claim when environment/dependency issues are detected.
+func autoFileClaim(dalName string, class ErrorClass, task, output string) {
+	dcURL := os.Getenv("DALCENTER_URL")
+	if dcURL == "" {
+		dcURL = "http://host.docker.internal:11190"
+	}
+
+	claimType := "env"
+	title := "환경 문제 감지"
+	if class == ErrClassDeps {
+		claimType = "env"
+		title = "의존성 문제 감지"
+	}
+
+	// Extract key error line from output
+	detail := extractErrorSummary(output)
+	body := fmt.Sprintf(`{"dal":%q,"type":%q,"title":%q,"detail":%q,"context":%q}`,
+		dalName, claimType, title, detail, truncate(task, 200))
+	resp, err := http.Post(dcURL+"/api/claim", "application/json", strings.NewReader(body))
+	if err != nil {
+		log.Printf("[claim] failed to file: %v", err)
+		return
+	}
+	resp.Body.Close()
+	log.Printf("[claim] auto-filed: dal=%s type=%s", dalName, claimType)
+}
+
+// extractErrorSummary picks the most useful line from error output.
+func extractErrorSummary(output string) string {
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "error") || strings.Contains(lower, "not found") ||
+			strings.Contains(lower, "permission denied") || strings.Contains(lower, "cannot") {
+			return strings.TrimSpace(line)
+		}
+	}
+	if len(output) > 200 {
+		return output[:200]
+	}
+	return output
+}
+
 // escalateToHost reports a task failure to the dalcenter daemon for tracking.
 func escalateToHost(dalName, task, output, errorClass string) {
 	dcURL := os.Getenv("DALCENTER_URL")

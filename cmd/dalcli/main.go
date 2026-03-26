@@ -17,7 +17,7 @@ func main() {
 		Short: fmt.Sprintf("Dal CLI for member dal (%s)", dalName),
 	}
 
-	root.AddCommand(statusCmd(dalName), psCmd(), reportCmd(dalName), runCmd(dalName))
+	root.AddCommand(statusCmd(dalName), psCmd(), reportCmd(dalName), claimCmd(dalName), runCmd(dalName))
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -82,6 +82,45 @@ func psCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func claimCmd(dalName string) *cobra.Command {
+	var claimType, detail, context string
+	cmd := &cobra.Command{
+		Use:   "claim <title>",
+		Short: "Submit a claim/improvement request to the host",
+		Long: `Submit feedback to the host operator.
+
+Types:
+  bug          — something broken
+  improvement  — suggestion for better tooling
+  blocked      — can't proceed without host action
+  env          — environment issue (missing tool, auth, disk)
+
+Examples:
+  dalcli claim --type bug "cargo not installed in container"
+  dalcli claim --type improvement "need --timeout flag for task execution"
+  dalcli claim --type blocked --detail "GH_TOKEN not set, can't push" "GitHub auth missing"
+  dalcli claim --type env "disk full, can't build Rust image"`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := daemon.NewClient()
+			if err != nil {
+				return err
+			}
+			title := args[0]
+			result, err := client.Claim(dalName, claimType, title, detail, context)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("[claim] submitted: %s (%s) — %s\n", result.ID, claimType, title)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&claimType, "type", "improvement", "Claim type: bug|improvement|blocked|env")
+	cmd.Flags().StringVar(&detail, "detail", "", "Detailed description")
+	cmd.Flags().StringVar(&context, "context", "", "Task or repo context")
+	return cmd
 }
 
 func reportCmd(dalName string) *cobra.Command {
