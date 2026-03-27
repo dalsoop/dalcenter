@@ -77,6 +77,28 @@ func Init(root string) error {
 		}
 	}
 
+	// Auto-create scribe dal
+	scribeDir := filepath.Join(root, "scribe")
+	if _, err := os.Stat(scribeDir); err != nil {
+		if err := os.MkdirAll(scribeDir, 0755); err != nil {
+			return fmt.Errorf("create scribe dir: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(scribeDir, "dal.cue"), []byte(defaultScribeCue), 0644); err != nil {
+			return fmt.Errorf("write scribe dal.cue: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(scribeDir, "instructions.md"), []byte(defaultScribeInstructions), 0644); err != nil {
+			return fmt.Errorf("write scribe instructions.md: %w", err)
+		}
+	}
+
+	// Auto-create wisdom.md
+	wisdomPath := filepath.Join(root, "wisdom.md")
+	if _, err := os.Stat(wisdomPath); err != nil {
+		if err := os.WriteFile(wisdomPath, []byte(defaultWisdom), 0644); err != nil {
+			return fmt.Errorf("write wisdom.md: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -102,6 +124,60 @@ const defaultDecisionsArchive = `# Decisions Archive
 
 const defaultGitattributes = `.dal/decisions.md merge=union
 .dal/decisions-archive.md merge=union
+.dal/*/history.md merge=union
+.dal/wisdom.md merge=union
+`
+
+const defaultScribeCue = `uuid:           "scribe-auto"
+name:           "scribe"
+version:        "1.0.0"
+player:         "claude"
+role:           "member"
+skills:         []
+hooks:          []
+auto_task:      "1. /workspace/decisions/inbox/ 파일 → decisions.md 병합 (중복 제거 후 삭제). 2. 각 dal history-buffer → .dal/{name}/history.md 병합. 3. wisdom/inbox → wisdom.md 병합. 4. history.md 12KB 초과 시 Core Context 압축. 5. decisions.md 50KB 초과 시 30일+ 항목 archive. 6. 변경 시 git add + commit + push."
+auto_interval:  "30m"
+git: {
+	user:         "dal-scribe"
+	email:        "dal-scribe@dalcenter.local"
+	github_token: "env:GITHUB_TOKEN"
+}
+`
+
+const defaultScribeInstructions = `# Scribe — 문서 관리자
+
+## Role
+팀 공유 기억의 유일한 file writer + committer. 사용자에게 보이지 않는 백그라운드 dal.
+
+## Responsibilities
+1. decisions/inbox/ → decisions.md 병합 (중복 제거: By + What 조합 기준)
+2. wisdom/inbox/ → wisdom.md 병합
+3. history-buffer/{name}.md → .dal/{name}/history.md 병합
+4. history.md 12KB 초과 시 Core Context로 압축
+5. decisions.md 50KB 초과 시 30일+ 항목 → decisions-archive.md
+6. 변경 시 git add + commit + push
+
+## Boundaries
+I handle: inbox 병합, history 압축, 아카이빙, 자동 커밋
+I don't handle: 코드, 리뷰, 테스트, 라우팅, Mattermost 대화
+
+## Rules
+- push 실패 시 재시도만. force push, reset 금지. 3회 실패 시 leader에게 claim.
+- 병합 후 inbox 파일 삭제.
+- history에는 최종 결과만. 중간 상태 금지.
+`
+
+const defaultWisdom = `# Wisdom
+
+팀 공유 교훈. 모든 dal은 작업 전에 이 파일을 읽는다.
+
+## Patterns
+
+검증된 접근 방식.
+
+## Anti-Patterns
+
+피해야 할 것.
 `
 
 // CreateDal creates a new dal folder with dal.cue and instructions.md.
