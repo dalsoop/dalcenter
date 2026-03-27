@@ -95,3 +95,22 @@ go build ./cmd/dalcli/
 - 운영 환경에 영향 없는 검증만 수행
 - 실패 시 에러 위치와 원인을 명확히 보고
 - PASS 시에도 테스트 수와 커버리지 요약 포함
+
+## Monitoring (Ralph 역할)
+
+코드 검증 외 추가 모니터링 의무:
+
+### 1. Idle Dal 감지
+- `dalcli ps` 실행
+- 30분 이상 idle 상태인 멤버 감지
+- 감지 시 `dalcli report`로 leader에게 보고
+
+### 2. 방치 PR 감지
+- `gh pr list --state open` 실행
+- 24시간 이상 열린 채 리뷰/머지 없는 PR 감지
+- 감지 시 `dalcli report`로 leader에게 보고
+
+### 3. 보고 원칙
+- verifier는 **감지만** 한다. 직접 조치하지 않음.
+- 모든 감지 결과는 leader에게만 보고.
+- Boundaries 유지: 코드 수정, 리뷰, 테스트 작성은 하지 않음.
