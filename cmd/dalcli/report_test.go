@@ -343,3 +343,103 @@ func TestFormatReport_Long(t *testing.T) {
 		t.Fatal("long output should be truncated")
 	}
 }
+
+// ── self_repair 테스트 ───────────────────────────────────
+
+func TestClassifyTaskError_Auth_Run(t *testing.T) {
+	c := classifyTaskError("401 authentication failed")
+	if c != ErrClassUnknown {
+		t.Fatalf("expected auth, got %s", c)
+	}
+}
+
+func TestClassifyTaskError_Env_Run(t *testing.T) {
+	c := classifyTaskError("command not found: node")
+	if c != ErrClassEnv {
+		t.Fatalf("expected env, got %s", c)
+	}
+}
+
+func TestClassifyTaskError_Unknown_Run(t *testing.T) {
+	c := classifyTaskError("something random happened")
+	if c != ErrClassUnknown {
+		t.Fatalf("expected unknown, got %s", c)
+	}
+}
+
+func TestTaskHash_Deterministic(t *testing.T) {
+	h1 := taskHash("hello world")
+	h2 := taskHash("hello world")
+	if h1 != h2 {
+		t.Fatal("same input must produce same hash")
+	}
+}
+
+func TestTaskHash_Different(t *testing.T) {
+	h1 := taskHash("hello")
+	h2 := taskHash("world")
+	if h1 == h2 {
+		t.Fatal("different input must produce different hash")
+	}
+}
+
+func TestIsRepairCoolingDown_Fresh(t *testing.T) {
+	if isRepairCoolingDown("newtask") {
+		t.Fatal("fresh task should not be cooling down")
+	}
+}
+
+func TestMarkAndCooldown(t *testing.T) {
+	key := "cooldown-test-unique-12345"
+	markRepairAttempted(key)
+	if !isRepairCoolingDown(key) {
+		t.Fatal("should be cooling down after mark")
+	}
+}
+
+// ── circuit breaker 추가 테스트 ──────────────────────────
+
+func TestCircuitBreaker_DefaultClosed(t *testing.T) {
+	cb := NewCircuitBreaker(3, 30*time.Second)
+	if cb.ShouldFallback() {
+		t.Fatal("new circuit should be closed (no fallback)")
+	}
+}
+
+func TestCircuitBreaker_OpensAfterFailures(t *testing.T) {
+	cb := NewCircuitBreaker(3, 30*time.Second)
+	for i := 0; i < 10; i++ {
+		cb.RecordFailure()
+	}
+	if !cb.ShouldFallback() {
+		t.Fatal("circuit should open after many failures")
+	}
+}
+
+func TestCircuitBreaker_ResetsOnSuccess(t *testing.T) {
+	cb := NewCircuitBreaker(3, 30*time.Second)
+	for i := 0; i < 10; i++ {
+		cb.RecordFailure()
+	}
+	cb.RecordSuccess()
+	if cb.ShouldFallback() {
+		t.Fatal("circuit should close after success")
+	}
+}
+
+// ── extractErrorSummary 테스트 ───────────────────────────
+
+func TestExtractErrorSummary_Short(t *testing.T) {
+	s := extractErrorSummary("short error")
+	if s == "" {
+		t.Fatal("should return something for short error")
+	}
+}
+
+func TestExtractErrorSummary_Long(t *testing.T) {
+	long := strings.Repeat("error line\n", 100)
+	s := extractErrorSummary(long)
+	if len(s) > 500 {
+		t.Fatalf("summary should be truncated, got %d chars", len(s))
+	}
+}
