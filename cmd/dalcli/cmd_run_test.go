@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +14,43 @@ import (
 
 	"github.com/dalsoop/dalcenter/internal/bridge"
 )
+
+func writeFakeCommand(t *testing.T, name string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, name)
+	script := `#!/bin/sh
+stdin=$(cat)
+{
+  printf 'argv:'
+  for arg in "$@"; do
+    printf '[%s]' "$arg"
+  done
+  printf '\nstdin:%s\n' "$stdin"
+} > "$DAL_TEST_CAPTURE"
+printf '%s' "${DAL_TEST_STDOUT:-ok}"
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake command: %v", err)
+	}
+	return dir
+}
+
+func readCapture(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read capture: %v", err)
+	}
+	return string(data)
+}
+
+func ensureWorkspaceDir(t *testing.T) {
+	t.Helper()
+	if err := os.MkdirAll("/workspace", 0o755); err != nil {
+		t.Fatalf("ensure /workspace: %v", err)
+	}
+}
 
 // ── extractTask ──
 
@@ -291,6 +329,128 @@ func TestBuildThreadContext_Fallback(t *testing.T) {
 	}
 }
 
+func TestBuildThreadContext_LimitsMessages(t *testing.T) {
+	var srvURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/thread"):
+			resp := map[string]interface{}{
+				"order": []string{"p1", "p2", "p3", "p4"},
+				"posts": map[string]interface{}{
+					"p1": map[string]interface{}{"user_id": "user-devops", "message": "첫 번째"},
+					"p2": map[string]interface{}{"user_id": "bot-writer", "message": "두 번째"},
+					"p3": map[string]interface{}{"user_id": "user-devops", "message": "세 번째"},
+					"p4": map[string]interface{}{"user_id": "bot-writer", "message": "네 번째"},
+				},
+			}
+			json.NewEncoder(w).Encode(resp)
+		case r.URL.Path == "/api/agent-config/writer":
+			json.NewEncoder(w).Encode(agentConfig{
+				DalName:   "writer",
+				BotToken:  "tok",
+				ChannelID: "ch1",
+				MMURL:     srvURL,
+			})
+		default:
+			w.Write([]byte(`{}`))
+		}
+	}))
+	defer srv.Close()
+	srvURL = srv.URL
+
+	t.Setenv("DALCENTER_URL", srv.URL)
+	t.Setenv("DAL_THREAD_CONTEXT_MESSAGES", "2")
+	t.Setenv("DAL_THREAD_CONTEXT_CHARS", "6000")
+
+	mm := &bridge.MattermostBridge{BotUserID: "bot-writer"}
+	msg := bridge.Message{
+		ID:      "p4",
+		RootID:  "p1",
+		From:    "user-devops",
+		Content: "네 번째",
+	}
+
+	ctx := buildThreadContext(mm, msg, "writer")
+
+	if !strings.Contains(ctx, "(최근 2개 메시지만 포함)") {
+		t.Fatal("should mention message truncation")
+	}
+	if strings.Contains(ctx, "첫 번째") || strings.Contains(ctx, "두 번째") {
+		t.Fatal("should drop older messages from thread context")
+	}
+	if !strings.Contains(ctx, "세 번째") || !strings.Contains(ctx, "네 번째") {
+		t.Fatal("should retain most recent messages")
+	}
+}
+
+func TestBuildThreadContext_LimitsChars(t *testing.T) {
+	var srvURL string
+	longFirst := strings.Repeat("가", 80)
+	longSecond := strings.Repeat("나", 80)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/thread"):
+			resp := map[string]interface{}{
+				"order": []string{"p1", "p2"},
+				"posts": map[string]interface{}{
+					"p1": map[string]interface{}{"user_id": "user-devops", "message": longFirst},
+					"p2": map[string]interface{}{"user_id": "bot-writer", "message": longSecond},
+				},
+			}
+			json.NewEncoder(w).Encode(resp)
+		case r.URL.Path == "/api/agent-config/writer":
+			json.NewEncoder(w).Encode(agentConfig{
+				DalName:   "writer",
+				BotToken:  "tok",
+				ChannelID: "ch1",
+				MMURL:     srvURL,
+			})
+		default:
+			w.Write([]byte(`{}`))
+		}
+	}))
+	defer srv.Close()
+	srvURL = srv.URL
+
+	t.Setenv("DALCENTER_URL", srv.URL)
+	t.Setenv("DAL_THREAD_CONTEXT_MESSAGES", "8")
+	t.Setenv("DAL_THREAD_CONTEXT_CHARS", "120")
+
+	mm := &bridge.MattermostBridge{BotUserID: "bot-writer"}
+	msg := bridge.Message{
+		ID:      "p2",
+		RootID:  "p1",
+		From:    "user-devops",
+		Content: longSecond,
+	}
+
+	ctx := buildThreadContext(mm, msg, "writer")
+
+	if !strings.Contains(ctx, "...(이전 스레드 내용 생략)...") {
+		t.Fatal("should include truncation marker when char cap is exceeded")
+	}
+	if len(ctx) <= 120 {
+		t.Fatal("expected explanatory suffix beyond raw cap")
+	}
+}
+
+func TestParsePositiveEnvInt(t *testing.T) {
+	t.Setenv("DAL_THREAD_CONTEXT_MESSAGES", "12")
+	if got := parsePositiveEnvInt("DAL_THREAD_CONTEXT_MESSAGES", 8); got != 12 {
+		t.Fatalf("got %d, want 12", got)
+	}
+
+	t.Setenv("DAL_THREAD_CONTEXT_MESSAGES", "0")
+	if got := parsePositiveEnvInt("DAL_THREAD_CONTEXT_MESSAGES", 8); got != 8 {
+		t.Fatalf("zero should fall back, got %d", got)
+	}
+
+	t.Setenv("DAL_THREAD_CONTEXT_MESSAGES", "bad")
+	if got := parsePositiveEnvInt("DAL_THREAD_CONTEXT_MESSAGES", 8); got != 8 {
+		t.Fatalf("invalid value should fall back, got %d", got)
+	}
+}
+
 // ── fetchAgentConfig ──
 
 func TestFetchAgentConfig_Success(t *testing.T) {
@@ -409,9 +569,9 @@ func TestMessageRouting_FreeFormFallback(t *testing.T) {
 
 func TestIsDalOnlyChanges(t *testing.T) {
 	tests := []struct {
-		name   string
-		input  string
-		want   bool
+		name  string
+		input string
+		want  bool
 	}{
 		{"dal only", " M .dal/context/foo.md\n M .dal/data/claims.json", true},
 		{"dal added", "?? .dal/context/new.md", true},
@@ -493,38 +653,153 @@ func TestExecuteTask_NonRetryable_NoLoop(t *testing.T) {
 // ── runProvider player branching ──
 
 func TestRunProvider_Codex(t *testing.T) {
-	os.Setenv("DAL_PLAYER", "codex")
-	os.Setenv("DAL_ROLE", "member")
-	defer os.Unsetenv("DAL_PLAYER")
-	defer os.Unsetenv("DAL_ROLE")
+	ensureWorkspaceDir(t)
+	fakeDir := writeFakeCommand(t, "codex")
+	capture := filepath.Join(t.TempDir(), "codex.txt")
+	t.Setenv("PATH", fakeDir+":"+os.Getenv("PATH"))
+	t.Setenv("DAL_TEST_CAPTURE", capture)
+	t.Setenv("DAL_TEST_STDOUT", "codex ok")
+	t.Setenv("DAL_ROLE", "member")
 
-	// codex not available in test → just verify it doesn't panic
-	_, err := runClaude(os.Getenv("DAL_PLAYER"), "test")
-	if err == nil {
-		t.Log("codex available — unusual but ok")
+	out, err := runClaude("codex", "test")
+	if err != nil {
+		t.Fatalf("runClaude codex: %v", err)
+	}
+	if out != "codex ok" {
+		t.Fatalf("stdout = %q", out)
+	}
+	got := readCapture(t, capture)
+	for _, want := range []string{
+		"argv:[exec][--dangerously-bypass-approvals-and-sandbox][--ephemeral][-C][/workspace][test]",
+		"stdin:",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("capture missing %q in %q", want, got)
+		}
 	}
 }
 
 func TestRunProvider_Claude_Leader(t *testing.T) {
-	os.Setenv("DAL_PLAYER", "claude")
-	os.Setenv("DAL_ROLE", "leader")
-	defer os.Unsetenv("DAL_PLAYER")
-	defer os.Unsetenv("DAL_ROLE")
+	ensureWorkspaceDir(t)
+	fakeDir := writeFakeCommand(t, "claude")
+	capture := filepath.Join(t.TempDir(), "claude-leader.txt")
+	t.Setenv("PATH", fakeDir+":"+os.Getenv("PATH"))
+	t.Setenv("DAL_TEST_CAPTURE", capture)
+	t.Setenv("DAL_TEST_STDOUT", "leader ok")
+	t.Setenv("DAL_ROLE", "leader")
 
-	_, err := runClaude(os.Getenv("DAL_PLAYER"), "test")
-	if err == nil {
-		t.Log("claude available — unusual but ok")
+	out, err := runClaude("claude", "test")
+	if err != nil {
+		t.Fatalf("runClaude claude leader: %v", err)
+	}
+	if out != "leader ok" {
+		t.Fatalf("stdout = %q", out)
+	}
+	got := readCapture(t, capture)
+	for _, want := range []string{
+		"[--allowedTools][Bash(dalcli-leader:*,git:*,gh:*) Read Write Glob Grep Edit]",
+		"[--no-session-persistence]",
+		"[--print][test]",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("capture missing %q in %q", want, got)
+		}
 	}
 }
 
 func TestRunProvider_Claude_Member(t *testing.T) {
-	os.Setenv("DAL_PLAYER", "claude")
-	os.Setenv("DAL_ROLE", "member")
-	defer os.Unsetenv("DAL_PLAYER")
-	defer os.Unsetenv("DAL_ROLE")
+	ensureWorkspaceDir(t)
+	fakeDir := writeFakeCommand(t, "claude")
+	capture := filepath.Join(t.TempDir(), "claude-member.txt")
+	t.Setenv("PATH", fakeDir+":"+os.Getenv("PATH"))
+	t.Setenv("DAL_TEST_CAPTURE", capture)
+	t.Setenv("DAL_TEST_STDOUT", "member ok")
+	t.Setenv("DAL_ROLE", "member")
 
-	_, err := runClaude(os.Getenv("DAL_PLAYER"), "test")
-	if err == nil {
-		t.Log("claude available — unusual but ok")
+	out, err := runClaude("claude", "test")
+	if err != nil {
+		t.Fatalf("runClaude claude member: %v", err)
+	}
+	if out != "member ok" {
+		t.Fatalf("stdout = %q", out)
+	}
+	got := readCapture(t, capture)
+	for _, want := range []string{
+		"[--allowedTools][Bash(git:*,gh:*) Read Write Glob Grep Edit]",
+		"[--no-session-persistence]",
+		"[--print][test]",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("capture missing %q in %q", want, got)
+		}
+	}
+}
+
+func TestRunProvider_Claude_ExtraBashOverride(t *testing.T) {
+	ensureWorkspaceDir(t)
+	fakeDir := writeFakeCommand(t, "claude")
+	capture := filepath.Join(t.TempDir(), "claude-extra-bash.txt")
+	t.Setenv("PATH", fakeDir+":"+os.Getenv("PATH"))
+	t.Setenv("DAL_TEST_CAPTURE", capture)
+	t.Setenv("DAL_ROLE", "member")
+	t.Setenv("DAL_EXTRA_BASH", "make")
+
+	if _, err := runClaude("claude", "test"); err != nil {
+		t.Fatalf("runClaude claude extra bash: %v", err)
+	}
+	got := readCapture(t, capture)
+	if !strings.Contains(got, "[--allowedTools][Bash(git:*,gh:*,make:*) Read Write Glob Grep Edit]") {
+		t.Fatalf("capture = %q", got)
+	}
+}
+
+func TestProviderSessionPersistenceEnabled(t *testing.T) {
+	t.Setenv("DAL_PERSIST_PROVIDER_SESSION", "")
+	if providerSessionPersistenceEnabled() {
+		t.Fatal("persistence should be disabled by default")
+	}
+
+	for _, v := range []string{"1", "true", "yes", "on", "TRUE"} {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("DAL_PERSIST_PROVIDER_SESSION", v)
+			if !providerSessionPersistenceEnabled() {
+				t.Fatalf("expected %q to enable persistence", v)
+			}
+		})
+	}
+}
+
+func TestRunProvider_Claude_PersistenceOverride(t *testing.T) {
+	ensureWorkspaceDir(t)
+	fakeDir := writeFakeCommand(t, "claude")
+	capture := filepath.Join(t.TempDir(), "claude-persist.txt")
+	t.Setenv("PATH", fakeDir+":"+os.Getenv("PATH"))
+	t.Setenv("DAL_TEST_CAPTURE", capture)
+	t.Setenv("DAL_ROLE", "member")
+	t.Setenv("DAL_PERSIST_PROVIDER_SESSION", "true")
+
+	if _, err := runClaude("claude", "test"); err != nil {
+		t.Fatalf("runClaude claude persistent: %v", err)
+	}
+	got := readCapture(t, capture)
+	if strings.Contains(got, "--no-session-persistence") {
+		t.Fatalf("capture should omit no-session-persistence: %q", got)
+	}
+}
+
+func TestRunProvider_Codex_PersistenceOverride(t *testing.T) {
+	ensureWorkspaceDir(t)
+	fakeDir := writeFakeCommand(t, "codex")
+	capture := filepath.Join(t.TempDir(), "codex-persist.txt")
+	t.Setenv("PATH", fakeDir+":"+os.Getenv("PATH"))
+	t.Setenv("DAL_TEST_CAPTURE", capture)
+	t.Setenv("DAL_PERSIST_PROVIDER_SESSION", "true")
+
+	if _, err := runClaude("codex", "test"); err != nil {
+		t.Fatalf("runClaude codex persistent: %v", err)
+	}
+	got := readCapture(t, capture)
+	if strings.Contains(got, "--ephemeral") {
+		t.Fatalf("capture should omit ephemeral: %q", got)
 	}
 }

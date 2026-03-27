@@ -2,8 +2,8 @@ package talk
 
 import (
 	"bytes"
-	"encoding/json"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -47,9 +47,17 @@ func (e *Executor) Run(ctx context.Context, mode Mode, message string) (string, 
 	var args []string
 	switch mode {
 	case ModeAsk:
-		args = []string{"--print", prompt}
+		args = []string{}
+		if !talkSessionPersistenceEnabled() {
+			args = append(args, "--no-session-persistence")
+		}
+		args = append(args, "--print", prompt)
 	case ModeExec:
-		args = []string{"-p", prompt, "--allowedTools", "Bash,Read,Write,Edit", "--output-format", "stream-json", "--verbose"}
+		args = []string{}
+		if !talkSessionPersistenceEnabled() {
+			args = append(args, "--no-session-persistence")
+		}
+		args = append(args, "-p", prompt, "--allowedTools", "Bash,Read,Write,Edit", "--output-format", "stream-json", "--verbose")
 	default:
 		return "", fmt.Errorf("unknown mode: %s", mode)
 	}
@@ -97,6 +105,15 @@ func extractResult(output string) string {
 		}
 	}
 	return strings.TrimSpace(output)
+}
+
+func talkSessionPersistenceEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("DAL_PERSIST_TALK_SESSION"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // Sanitizer redacts sensitive content from dal output.

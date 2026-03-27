@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -263,10 +264,10 @@ func runAgentLoop(dalName string) error {
 func isDalOnlyChanges(porcelainOutput string) bool {
 	lines := strings.Split(porcelainOutput, "\n")
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
+		if strings.TrimSpace(line) == "" {
 			continue
 		}
+		line = strings.TrimRight(line, "\r")
 		// git porcelain format: "XY filename" or "XY filename -> renamed"
 		// strip the two-char status prefix + space
 		file := line
@@ -364,13 +365,15 @@ func isActiveThread(threads *sync.Map, threadID string) bool {
 func buildThreadContext(mm *bridge.MattermostBridge, newMsg bridge.Message, dalName string) string {
 	var sb strings.Builder
 	sb.WriteString("너는 Mattermost 스레드에서 대화 중이다. ")
-	sb.WriteString("아래는 스레드 전체 대화 내역이다. 마지막 메시지에 대해 응답하라.\n\n")
+	sb.WriteString("아래는 최근 스레드 대화 내역이다. 마지막 메시지에 대해 응답하라.\n\n")
 
 	// Fetch full thread from MM API
 	threadID := newMsg.RootID
 	if threadID == "" {
 		threadID = newMsg.ID
 	}
+	maxMessages := parsePositiveEnvInt("DAL_THREAD_CONTEXT_MESSAGES", 8)
+	maxChars := parsePositiveEnvInt("DAL_THREAD_CONTEXT_CHARS", 6000)
 
 	dcURL := os.Getenv("DALCENTER_URL")
 	agentCfg, _ := fetchAgentConfig(dalName)
@@ -387,7 +390,12 @@ func buildThreadContext(mm *bridge.MattermostBridge, newMsg bridge.Message, dalN
 				Posts map[string]json.RawMessage `json:"posts"`
 			}
 			if json.Unmarshal(body, &thread) == nil {
-				for _, pid := range thread.Order {
+				order := thread.Order
+				if len(order) > maxMessages {
+					order = order[len(order)-maxMessages:]
+					sb.WriteString(fmt.Sprintf("(최근 %d개 메시지만 포함)\n\n", maxMessages))
+				}
+				for _, pid := range order {
 					var post struct {
 						UserID  string `json:"user_id"`
 						Message string `json:"message"`
@@ -398,7 +406,16 @@ func buildThreadContext(mm *bridge.MattermostBridge, newMsg bridge.Message, dalN
 							role = "나(" + dalName + ")"
 						}
 						sb.WriteString(fmt.Sprintf("[%s]: %s\n\n", role, post.Message))
+						if sb.Len() >= maxChars {
+							break
+						}
 					}
+				}
+				if sb.Len() > maxChars {
+					text := sb.String()
+					text = text[:maxChars] + "\n\n...(이전 스레드 내용 생략)...\n\n"
+					sb.Reset()
+					sb.WriteString(text)
 				}
 				sb.WriteString(fmt.Sprintf("---\n너의 이름: %s. 위 대화 맥락을 보고 마지막 메시지에 응답하라. 간결하게.", dalName))
 				return sb.String()
@@ -542,14 +559,24 @@ func runProvider(player, task string) (string, error) {
 
 func runClaude(player, task string) (string, error) {
 	role := os.Getenv("DAL_ROLE")
+	persistSession := providerSessionPersistenceEnabled()
 
 	var cmd *exec.Cmd
 	switch player {
 	case "codex":
-		cmd = exec.Command("codex", "exec",
+		args := []string{
+			"exec",
 			"--dangerously-bypass-approvals-and-sandbox",
+		}
+		if !persistSession {
+			// Prevent dal tasks from reusing a long-lived local session file.
+			args = append(args, "--ephemeral")
+		}
+		args = append(args,
 			"-C", "/workspace",
-			task)
+			task,
+		)
+		cmd = exec.Command("codex", args...)
 	default: // claude
 		// Build allowed tools based on role and extra permissions
 		var allowedTools string
@@ -566,9 +593,17 @@ func runClaude(player, task string) (string, error) {
 			}
 			allowedTools = fmt.Sprintf("Bash(%s) Read Write Glob Grep Edit", bashPerms)
 		}
-		cmd = exec.Command("claude",
+		args := []string{
 			"--allowedTools", allowedTools,
-			"--print", task)
+		}
+		if !persistSession {
+			// Avoid runaway cache-read growth from repeatedly resuming the same print session.
+			args = append(args, "--no-session-persistence")
+		}
+		args = append(args,
+			"--print", task,
+		)
+		cmd = exec.Command("claude", args...)
 	}
 
 	// Task timeout: max 5 minutes per execution
@@ -600,6 +635,15 @@ func runClaude(player, task string) (string, error) {
 	}
 
 	return stdout.String(), err
+}
+
+func providerSessionPersistenceEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("DAL_PERSIST_PROVIDER_SESSION"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // isRetryable checks if the error output indicates a rate limit or overload.
@@ -655,6 +699,18 @@ func parseInterval(s string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+func parsePositiveEnvInt(name string, fallback int) int {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return fallback
+	}
+	return n
 }
 
 // containsFailure checks if output indicates test/build failures.

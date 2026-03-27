@@ -4,9 +4,37 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func writeFakeDocker(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "docker")
+	script := `#!/bin/sh
+stdin=$(cat)
+{
+  printf 'argv:'
+  for arg in "$@"; do
+    printf '[%s]' "$arg"
+  done
+  printf '\nstdin:%s\n--\n' "$stdin"
+} >> "$DAL_TEST_CAPTURE"
+case "$*" in
+  *"git diff --stat HEAD"*)
+    exit 0
+    ;;
+esac
+printf '%s' "${DAL_TEST_STDOUT:-task ok}"
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake docker: %v", err)
+	}
+	return dir
+}
 
 func TestTaskStore_New(t *testing.T) {
 	s := newTaskStore()
@@ -175,5 +203,66 @@ func TestMessageFallback_NoMM(t *testing.T) {
 	d.handleMessage(w, req)
 	if w.Code != 503 {
 		t.Errorf("expected 503, got %d", w.Code)
+	}
+}
+
+func TestExecTaskInContainer_ClaudeDisablesSessionPersistence(t *testing.T) {
+	fakeDir := writeFakeDocker(t)
+	capture := filepath.Join(t.TempDir(), "docker-claude.txt")
+	t.Setenv("PATH", fakeDir+":"+os.Getenv("PATH"))
+	t.Setenv("DAL_TEST_CAPTURE", capture)
+	t.Setenv("DAL_TEST_STDOUT", "claude task ok")
+
+	d := New(":0", "/tmp/test", t.TempDir(), nil)
+	tr := &taskResult{ID: "task-claude", Task: "inspect repo"}
+	c := &Container{DalName: "writer", ContainerID: "cid-123", Player: "claude"}
+
+	d.execTaskInContainer(c, tr)
+
+	if tr.Status != "done" {
+		t.Fatalf("status = %q, error=%q", tr.Status, tr.Error)
+	}
+	if tr.Output != "claude task ok" {
+		t.Fatalf("output = %q", tr.Output)
+	}
+	data, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatalf("read capture: %v", err)
+	}
+	got := string(data)
+	for _, want := range []string{
+		"argv:[exec][-i][-e][CLAUDE_CODE_ENTRYPOINT=dalcli][cid-123][bash][-c]",
+		"claude --no-session-persistence -p --allowedTools \"$TOOLS\"",
+		"stdin:inspect repo",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("capture missing %q in %q", want, got)
+		}
+	}
+}
+
+func TestExecTaskInContainer_CodexUsesEphemeral(t *testing.T) {
+	fakeDir := writeFakeDocker(t)
+	capture := filepath.Join(t.TempDir(), "docker-codex.txt")
+	t.Setenv("PATH", fakeDir+":"+os.Getenv("PATH"))
+	t.Setenv("DAL_TEST_CAPTURE", capture)
+	t.Setenv("DAL_TEST_STDOUT", "codex task ok")
+
+	d := New(":0", "/tmp/test", t.TempDir(), nil)
+	tr := &taskResult{ID: "task-codex", Task: "inspect repo"}
+	c := &Container{DalName: "writer", ContainerID: "cid-456", Player: "codex"}
+
+	d.execTaskInContainer(c, tr)
+
+	if tr.Status != "done" {
+		t.Fatalf("status = %q, error=%q", tr.Status, tr.Error)
+	}
+	data, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatalf("read capture: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "argv:[exec][cid-456][codex][exec][--dangerously-bypass-approvals-and-sandbox][--ephemeral][-C][/workspace][inspect repo]") {
+		t.Fatalf("capture = %q", got)
 	}
 }

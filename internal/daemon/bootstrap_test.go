@@ -3,13 +3,13 @@ package daemon
 import (
 	"encoding/json"
 	"fmt"
-	"time"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ── #121: Claude Code autoApprove injection ──────────────────
@@ -33,6 +33,27 @@ func TestDockerRun_SettingsHasBashPermission(t *testing.T) {
 	src := readSource(t, "docker.go")
 	if !strings.Contains(src, `Bash(*)`) {
 		t.Fatal("settings must include Bash(*) permission")
+	}
+}
+
+func TestTaskExecution_UsesEphemeralCodexSessions(t *testing.T) {
+	src := readSource(t, "task.go")
+	if !strings.Contains(src, `"--ephemeral"`) {
+		t.Fatal("codex task execution must force ephemeral sessions")
+	}
+}
+
+func TestTaskExecution_DisablesClaudeSessionPersistence(t *testing.T) {
+	src := readSource(t, "task.go")
+	if !strings.Contains(src, "--no-session-persistence") {
+		t.Fatal("claude task execution must disable session persistence")
+	}
+}
+
+func TestTalkExecutor_DisablesClaudeSessionPersistence(t *testing.T) {
+	src := readSource(t, "../talk/executor.go")
+	if !strings.Contains(src, "--no-session-persistence") {
+		t.Fatal("talk executor must disable session persistence")
 	}
 }
 
@@ -115,7 +136,7 @@ func TestHandleAgentConfig_SkipsEmptyBotUsername(t *testing.T) {
 func TestContainerHasBotUsername(t *testing.T) {
 	c := &Container{
 		DalName:     "dev",
-		BotUsername:  "dal-dev-abc123",
+		BotUsername: "dal-dev-abc123",
 	}
 	if c.BotUsername == "" {
 		t.Fatal("Container must have BotUsername field")
@@ -226,14 +247,7 @@ func TestCleanupOrphanBotDMs_Exists(t *testing.T) {
 
 // ── Member → Leader reporting ────────────────────────────────
 
-
-
-
-
-
-
 // ── Bridge: GetUsername ──────────────────────────────────────
-
 
 // ── helper ───────────────────────────────────────────────────
 
@@ -251,8 +265,6 @@ func readSource(t *testing.T, relPath string) string {
 	}
 	return string(data)
 }
-
-
 
 // ── MATTERMOST_URL 환경변수 주입 ─────────────────────────
 
@@ -361,7 +373,7 @@ func TestContainer_AllFieldsPresent(t *testing.T) {
 		Workspace:   "shared",
 		Skills:      3,
 		BotToken:    "tok",
-		BotUsername:  "dal-test",
+		BotUsername: "dal-test",
 	}
 	if c.BotUsername == "" {
 		t.Fatal("BotUsername must be settable")
@@ -763,7 +775,7 @@ func TestHandlePs_WithContainers(t *testing.T) {
 
 func TestHandleStatus_ShowsAllDals(t *testing.T) {
 	d := &Daemon{
-		containers:  map[string]*Container{},
+		containers:   map[string]*Container{},
 		localdalRoot: t.TempDir(),
 	}
 	req := httptest.NewRequest("GET", "/api/status", nil)

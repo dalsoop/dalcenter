@@ -13,13 +13,13 @@ import (
 
 // taskResult holds the result of a direct task execution.
 type taskResult struct {
-	ID        string    `json:"id"`
-	Dal       string    `json:"dal"`
-	Task      string    `json:"task"`
-	Output    string    `json:"output"`
-	Error     string    `json:"error,omitempty"`
-	Status    string    `json:"status"` // "running", "done", "failed"
-	StartedAt time.Time `json:"started_at"`
+	ID        string     `json:"id"`
+	Dal       string     `json:"dal"`
+	Task      string     `json:"task"`
+	Output    string     `json:"output"`
+	Error     string     `json:"error,omitempty"`
+	Status    string     `json:"status"` // "running", "done", "failed"
+	StartedAt time.Time  `json:"started_at"`
 	DoneAt    *time.Time `json:"done_at,omitempty"`
 	// Post-task verification
 	GitDiff    string `json:"git_diff,omitempty"`    // workspace git diff after task
@@ -169,6 +169,7 @@ func (d *Daemon) execTaskInContainer(c *Container, tr *taskResult) {
 			"docker", "exec", c.ContainerID,
 			"codex", "exec",
 			"--dangerously-bypass-approvals-and-sandbox",
+			"--ephemeral",
 			"-C", containerWorkDir,
 			tr.Task,
 		}
@@ -181,7 +182,7 @@ func (d *Daemon) execTaskInContainer(c *Container, tr *taskResult) {
 				`elif [ "$DAL_ROLE" = "leader" ]; then `+
 				`TOOLS="Bash Read Write Glob Grep Edit"; `+
 				`else TOOLS="Bash(git:*,gh:*) Read Write Glob Grep Edit"; fi && `+
-				`claude -p --allowedTools "$TOOLS"`,
+				`claude --no-session-persistence -p --allowedTools "$TOOLS"`,
 			containerWorkDir)
 		cmdArgs = []string{
 			"docker", "exec",
