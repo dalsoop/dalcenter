@@ -22,6 +22,7 @@ type MattermostBridge struct {
 	Token        string
 	ChannelID    string
 	BotUserID    string
+	dmLastAt     map[string]int64 // per-DM-channel lastAt
 	PollInterval time.Duration
 
 	messages chan Message
@@ -145,9 +146,21 @@ func (m *MattermostBridge) fetchNewPosts() ([]Message, error) {
 		}
 	}
 
+	if m.dmLastAt == nil {
+		m.dmLastAt = make(map[string]int64)
+	}
+
 	var allMsgs []Message
 	for _, chID := range channels {
-		path := fmt.Sprintf("/api/v4/channels/%s/posts?since=%d", chID, m.lastAt)
+		sinceAt := m.lastAt
+		if chID != m.ChannelID {
+			if t, ok := m.dmLastAt[chID]; ok {
+				sinceAt = t
+			} else {
+				sinceAt = m.lastAt
+			}
+		}
+		path := fmt.Sprintf("/api/v4/channels/%s/posts?since=%d", chID, sinceAt)
 		data, err := m.apiGet(path)
 		if err != nil {
 			continue
@@ -175,8 +188,11 @@ func (m *MattermostBridge) fetchNewPosts() ([]Message, error) {
 			if err := json.Unmarshal(raw, &post); err != nil {
 				continue
 			}
-			if post.CreateAt <= m.lastAt {
+			if post.CreateAt <= sinceAt {
 				continue
+			}
+			if chID != m.ChannelID {
+				m.dmLastAt[chID] = post.CreateAt
 			}
 			if post.CreateAt > m.lastAt {
 				m.lastAt = post.CreateAt
