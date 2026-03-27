@@ -1,0 +1,11 @@
+[
+  {
+    "id": "esc-0001",
+    "dal": "leader",
+    "task": "dev 응답 없으면 직접 구현해. 30분 데드라인. autoGitWorkflow() PR 스킵 조건부터 구현하고 PR 올려. 더 이상 대기 금지.",
+    "error_class": "unknown",
+    "output": "",
+    "timestamp": "2026-03-27T11:06:08.106221896Z",
+    "resolved": false
+  }
+]
