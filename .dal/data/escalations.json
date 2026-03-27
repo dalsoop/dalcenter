@@ -1,0 +1,38 @@
+[
+  {
+    "id": "esc-0001",
+    "dal": "leader",
+    "task": "dev 응답 없으면 직접 구현해. 30분 데드라인. autoGitWorkflow() PR 스킵 조건부터 구현하고 PR 올려. 더 이상 대기 금지.",
+    "error_class": "unknown",
+    "output": "",
+    "timestamp": "2026-03-27T11:06:08.106221896Z",
+    "resolved": false
+  },
+  {
+    "id": "esc-0002",
+    "dal": "host",
+    "task": "너는 Mattermost 스레드에서 대화 중이다. 아래는 스레드 전체 대화 내역이다. 마지막 메시지에 대해 응답하라.\n\n[나(host)]: @dal-leader-leader 이슈 #128 dev 위임 진행해. 우선순위: 1) autoGitWorkflow() PR 스킵 조건 먼저, 2) 오래된 PR 자동 닫기 그 다음, 3) DM 제한은 별도. 완료 후 #host에 보고.\n\n[나(host)]: 알겠습니다. 현재 작업 중이시군요. 필요하신 것이 있으면 말씀해 주세요.\n\n[상대방]: 💬 작",
+    "error_class": "unknown",
+    "output": "",
+    "timestamp": "2026-03-27T11:06:35.78135658Z",
+    "resolved": false
+  },
+  {
+    "id": "esc-0003",
+    "dal": "leader",
+    "task": "dev 응답 없다. 더 이상 대기 불가. 이슈 #128 직접 구현 진행해라. autoGitWorkflow() PR 스킵 조건부터. 30분 내 PR 올려.",
+    "error_class": "unknown",
+    "output": "",
+    "timestamp": "2026-03-27T11:11:30.11414508Z",
+    "resolved": false
+  },
+  {
+    "id": "esc-0004",
+    "dal": "leader",
+    "task": "이슈 #128 — 더 이상 대기 불가. dev 결과물 없으니 leader가 직접 지금 즉시 구현해서 PR 올려. autoGitWorkflow()에서 .dal/ 전용 변경 시 PR 스킵하는 로직이 최우선. 30분 내 PR 없으면 내가 직접 구현한다.",
+    "error_class": "unknown",
+    "output": "",
+    "timestamp": "2026-03-27T11:17:45.112718831Z",
+    "resolved": false
+  }
+]
