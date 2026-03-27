@@ -53,8 +53,28 @@ func Init(root string) error {
 			return fmt.Errorf("write dal.spec.cue: %w", err)
 		}
 	}
+
+	decisionsPath := filepath.Join(root, "decisions.md")
+	if _, err := os.Stat(decisionsPath); err != nil {
+		if err := os.WriteFile(decisionsPath, []byte(defaultDecisions), 0644); err != nil {
+			return fmt.Errorf("write decisions.md: %w", err)
+		}
+	}
 	return nil
 }
+
+const defaultDecisions = `# Decisions
+
+Architectural decisions and team agreements. All dals read this file.
+Leader appends new entries. Format:
+
+` + "```" + `
+## YYYY-MM-DD — Title
+- Decision: ...
+- Reason: ...
+- Affected: ...
+` + "```" + `
+`
 
 // CreateDal creates a new dal folder with dal.cue and instructions.md.
 func CreateDal(root, name, player string) (*DalProfile, error) {

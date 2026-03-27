@@ -213,6 +213,12 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *
 	instrDst := filepath.Join(home, instructionsFileName(dal.Player))
 	args = append(args, "-v", fmt.Sprintf("%s:%s:ro", instrSrc, instrDst))
 
+	// Mount decisions.md as shared team memory (read-write)
+	decisionsPath := filepath.Join(localdalRoot, "decisions.md")
+	if _, err := os.Stat(decisionsPath); err == nil {
+		args = append(args, "-v", fmt.Sprintf("%s:%s", decisionsPath, filepath.Join(containerWorkDir, "decisions.md")))
+	}
+
 	// Inject Claude Code settings.json for autoApprove (dal runs unattended)
 	if dal.Player == "claude" {
 		settingsJSON := `{"permissions":{"allow":["Bash(*)","Edit(*)","Write(*)","Read(*)","Glob(*)","Grep(*)","WebFetch(*)","WebSearch","Agent(*)"],"defaultMode":"autoApprove"}}`
