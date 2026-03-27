@@ -74,11 +74,16 @@ func TestCreateAndListDal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(dals) != 1 {
-		t.Fatalf("got %d dals", len(dals))
+	// Init() auto-creates scribe dal, so expect 2 (scribe + dev)
+	if len(dals) != 2 {
+		t.Fatalf("got %d dals, want 2 (scribe + dev)", len(dals))
 	}
-	if dals[0].Name != "dev" {
-		t.Fatalf("name = %q", dals[0].Name)
+	names := make(map[string]bool)
+	for _, d := range dals {
+		names[d.Name] = true
+	}
+	if !names["dev"] {
+		t.Fatal("dev dal not found")
 	}
 }
 
@@ -100,8 +105,13 @@ func TestDeleteDal(t *testing.T) {
 		t.Fatal(err)
 	}
 	dals, _ := ListDals(root)
-	if len(dals) != 0 {
-		t.Fatal("dal should be deleted")
+	// scribe remains after deleting dev
+	names := make(map[string]bool)
+	for _, d := range dals {
+		names[d.Name] = true
+	}
+	if names["dev"] {
+		t.Fatal("dev dal should be deleted")
 	}
 }
 
