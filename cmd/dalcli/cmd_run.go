@@ -152,6 +152,9 @@ func runAgentLoop(dalName string) error {
 		if task == "" && isThreadReply {
 			task = msg.Content
 		}
+		if task == "" && isDM {
+			task = msg.Content
+		}
 		if task == "" {
 			continue
 		}
