@@ -133,8 +133,15 @@ func TestSkillCreateAddRemoveDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	skills, _ := ListSkills(root)
-	if len(skills) != 1 || skills[0] != "code-review" {
-		t.Fatalf("skills = %v", skills)
+	// Init() auto-creates 6 ops skills + we created code-review = 7
+	found := false
+	for _, s := range skills {
+		if s == "code-review" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("code-review not in skills = %v", skills)
 	}
 
 	// Add to dal
@@ -165,8 +172,10 @@ func TestSkillCreateAddRemoveDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	skills, _ = ListSkills(root)
-	if len(skills) != 0 {
-		t.Fatal("skill should be deleted")
+	for _, s := range skills {
+		if s == "code-review" {
+			t.Fatal("code-review should be deleted")
+		}
 	}
 }
 
