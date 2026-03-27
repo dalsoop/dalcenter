@@ -483,7 +483,7 @@ func executeTask(task string) (string, error) {
 		lastOut = out
 		lastErr = err
 
-		// Auth error → wait for credential sync (cron every 5min on host)
+		// Auth error → credential 문제이므로 circuit breaker 대상 아님
 		if isAuthError(out) {
 			wait := 60 * time.Second
 			name := os.Getenv("DAL_NAME")
@@ -493,25 +493,28 @@ func executeTask(task string) (string, error) {
 			continue
 		}
 
-		if isRetryable(out) {
-			providerCircuit.RecordFailure()
+		// 모든 provider 에러 → circuit breaker에 기록
+		providerCircuit.RecordFailure()
 
-			if providerCircuit.ShouldFallback() && fallbackPlayer != "" {
-				log.Printf("[circuit] switching to fallback %s (attempt %d/%d)", fallbackPlayer, attempt, maxRetries)
-				fbOut, fbErr := runProvider(fallbackPlayer, task)
-				if fbErr == nil {
-					return fbOut, nil
-				}
-				log.Printf("[circuit] fallback %s failed: %v", fallbackPlayer, fbErr)
+		// circuit open → fallback 시도
+		if providerCircuit.ShouldFallback() && fallbackPlayer != "" {
+			log.Printf("[circuit] switching to fallback %s (attempt %d/%d)", fallbackPlayer, attempt, maxRetries)
+			fbOut, fbErr := runProvider(fallbackPlayer, task)
+			if fbErr == nil {
+				return fbOut, nil
 			}
+			log.Printf("[circuit] fallback %s failed: %v", fallbackPlayer, fbErr)
+		}
 
+		// retryable → 대기 후 재시도
+		if isRetryable(out) {
 			wait := time.Duration(attempt*30) * time.Second
 			log.Printf("[agent] retrying primary in %s (attempt %d/%d)", wait, attempt, maxRetries)
 			time.Sleep(wait)
 			continue
 		}
 
-		// Non-retryable error
+		// non-retryable → 즉시 종료 (circuit에는 이미 기록됨)
 		return out, err
 	}
 
@@ -609,7 +612,11 @@ func isRetryable(output string) bool {
 		strings.Contains(lower, "429") ||
 		strings.Contains(lower, "529") ||
 		strings.Contains(lower, "too many requests") ||
-		strings.Contains(lower, "capacity")
+		strings.Contains(lower, "capacity") ||
+		strings.Contains(lower, "hit your limit") ||
+		strings.Contains(lower, "usage limit") ||
+		strings.Contains(lower, "limit exceeded") ||
+		strings.Contains(lower, "quota exceeded")
 }
 
 // isAuthError checks if the error is an authentication failure (401, expired token, etc).
