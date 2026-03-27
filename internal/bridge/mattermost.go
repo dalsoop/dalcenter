@@ -157,10 +157,10 @@ func (m *MattermostBridge) fetchNewPosts() ([]Message, error) {
 			if t, ok := m.dmLastAt[chID]; ok {
 				sinceAt = t
 			} else {
-				// First poll: start from now so only new DMs are received
-				now := time.Now().UnixMilli()
-				m.dmLastAt[chID] = now
-				sinceAt = now
+				// First poll: get the latest message timestamp from this DM channel
+				// so we only receive messages sent after bridge start
+				sinceAt = m.fetchChannelLatestAt(chID)
+				m.dmLastAt[chID] = sinceAt
 			}
 		}
 		path := fmt.Sprintf("/api/v4/channels/%s/posts?since=%d", chID, sinceAt)
@@ -211,6 +211,28 @@ func (m *MattermostBridge) fetchNewPosts() ([]Message, error) {
 		}
 	}
 	return allMsgs, nil
+}
+
+// fetchChannelLatestAt gets the latest message timestamp from a channel.
+func (m *MattermostBridge) fetchChannelLatestAt(chID string) int64 {
+	data, err := m.apiGet(fmt.Sprintf("/api/v4/channels/%s/posts?per_page=1", chID))
+	if err != nil {
+		return time.Now().UnixMilli()
+	}
+	var result struct {
+		Order []string                   `json:"order"`
+		Posts map[string]json.RawMessage `json:"posts"`
+	}
+	if json.Unmarshal(data, &result) != nil || len(result.Order) == 0 {
+		return time.Now().UnixMilli()
+	}
+	var post struct {
+		CreateAt int64 `json:"create_at"`
+	}
+	if json.Unmarshal(result.Posts[result.Order[0]], &post) == nil {
+		return post.CreateAt
+	}
+	return time.Now().UnixMilli()
 }
 
 func (m *MattermostBridge) fetchDMChannelIDs() ([]string, error) {
