@@ -3,6 +3,7 @@ package localdal
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -16,6 +17,37 @@ func TestInitCreatesStructure(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "dal.spec.cue")); err != nil {
 		t.Fatal("dal.spec.cue missing")
+	}
+}
+
+func TestInitCreatesDecisionsMd(t *testing.T) {
+	root := t.TempDir()
+	if err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "decisions.md")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal("decisions.md missing after init")
+	}
+	content, _ := os.ReadFile(path)
+	if !strings.Contains(string(content), "Architectural decisions") {
+		t.Error("decisions.md should contain template content")
+	}
+}
+
+func TestInitDecisionsMdIdempotent(t *testing.T) {
+	root := t.TempDir()
+	Init(root)
+
+	// Write custom content
+	path := filepath.Join(root, "decisions.md")
+	os.WriteFile(path, []byte("# Custom decisions\n"), 0644)
+
+	// Re-init should not overwrite
+	Init(root)
+	content, _ := os.ReadFile(path)
+	if string(content) != "# Custom decisions\n" {
+		t.Error("decisions.md should not be overwritten on re-init")
 	}
 }
 

@@ -119,6 +119,53 @@ func TestTruncateStr(t *testing.T) {
 	}
 }
 
+func TestVerifyTaskChanges_NoContainer(t *testing.T) {
+	tr := &taskResult{ID: "test-001", Status: "done"}
+	verifyTaskChanges("nonexistent-container-id", tr)
+	if tr.Verified != "skipped" {
+		t.Errorf("expected skipped for invalid container, got %q", tr.Verified)
+	}
+}
+
+func TestTaskResult_VerifiedFields(t *testing.T) {
+	tr := &taskResult{
+		ID:         "test-002",
+		Verified:   "no_changes",
+		GitChanges: 0,
+	}
+	data, err := json.Marshal(tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Verify JSON serialization includes verified field
+	if !strings.Contains(string(data), `"verified":"no_changes"`) {
+		t.Errorf("JSON should contain verified field: %s", data)
+	}
+	// git_diff should be omitted when empty
+	if strings.Contains(string(data), `"git_diff"`) {
+		t.Errorf("git_diff should be omitted when empty: %s", data)
+	}
+}
+
+func TestTaskResult_WithChanges(t *testing.T) {
+	tr := &taskResult{
+		ID:         "test-003",
+		Verified:   "yes",
+		GitDiff:    "M  README.md\nA  new-file.go",
+		GitChanges: 2,
+	}
+	data, err := json.Marshal(tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"git_changes":2`) {
+		t.Errorf("expected git_changes:2 in JSON: %s", data)
+	}
+	if !strings.Contains(string(data), `"verified":"yes"`) {
+		t.Errorf("expected verified:yes in JSON: %s", data)
+	}
+}
+
 func TestMessageFallback_NoMM(t *testing.T) {
 	d := New(":0", "/tmp/test", t.TempDir(), nil)
 	// No MM configured, no running dals → should return 503

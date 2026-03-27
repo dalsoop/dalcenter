@@ -21,6 +21,10 @@ type taskResult struct {
 	Status    string    `json:"status"` // "running", "done", "failed"
 	StartedAt time.Time `json:"started_at"`
 	DoneAt    *time.Time `json:"done_at,omitempty"`
+	// Post-task verification
+	GitDiff    string `json:"git_diff,omitempty"`    // workspace git diff after task
+	GitChanges int    `json:"git_changes,omitempty"` // number of files changed
+	Verified   string `json:"verified,omitempty"`    // "yes", "no_changes", "skipped"
 }
 
 // taskStore manages running and completed direct tasks.
@@ -218,7 +222,11 @@ func (d *Daemon) execTaskInContainer(c *Container, tr *taskResult) {
 	} else {
 		tr.Status = "done"
 		tr.Output = stdout.String()
-		log.Printf("[task] %s done (%d bytes)", tr.ID, len(tr.Output))
+
+		// Post-task verification: check git diff in workspace
+		verifyTaskChanges(c.ContainerID, tr)
+
+		log.Printf("[task] %s done (%d bytes, verified=%s, changes=%d)", tr.ID, len(tr.Output), tr.Verified, tr.GitChanges)
 
 		dispatchWebhook(WebhookEvent{
 			Event:      "task_complete",
@@ -227,6 +235,34 @@ func (d *Daemon) execTaskInContainer(c *Container, tr *taskResult) {
 			OutputSize: len(tr.Output),
 			Timestamp:  now.Format(time.RFC3339),
 		})
+	}
+}
+
+// verifyTaskChanges runs git diff inside the container to verify actual file changes.
+func verifyTaskChanges(containerID string, tr *taskResult) {
+	diffCmd := exec.Command("docker", "exec", containerID,
+		"bash", "-c", fmt.Sprintf("cd %s && git diff --stat HEAD 2>/dev/null; git diff --stat --cached HEAD 2>/dev/null; git status --porcelain 2>/dev/null", containerWorkDir))
+	diffOut, err := diffCmd.Output()
+	if err != nil {
+		tr.Verified = "skipped"
+		return
+	}
+
+	diff := strings.TrimSpace(string(diffOut))
+	if diff == "" {
+		tr.Verified = "no_changes"
+		tr.GitDiff = ""
+		tr.GitChanges = 0
+	} else {
+		tr.Verified = "yes"
+		tr.GitDiff = truncateStr(diff, 2000)
+		// Count changed files from porcelain output
+		for _, line := range strings.Split(diff, "\n") {
+			line = strings.TrimSpace(line)
+			if len(line) >= 2 && (line[0] == 'M' || line[0] == 'A' || line[0] == 'D' || line[0] == '?' || line[0] == 'R') {
+				tr.GitChanges++
+			}
+		}
 	}
 }
 
