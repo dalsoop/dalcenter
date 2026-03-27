@@ -312,3 +312,98 @@ func TestClientAgentConfig_Exists(t *testing.T) {
 		t.Fatal("Client must have AgentConfig method")
 	}
 }
+
+// ── handleAgentConfig team_members 동작 테스트 ──────────
+
+func TestHandleAgentConfig_MultipleTeamMembers(t *testing.T) {
+	d := &Daemon{
+		containers: map[string]*Container{
+			"leader": {DalName: "leader", BotToken: "t1", BotUsername: "dal-leader-x"},
+			"dev":    {DalName: "dev", BotToken: "t2", BotUsername: "dal-dev-y"},
+			"test":   {DalName: "test", BotToken: "t3", BotUsername: "dal-test-z"},
+		},
+		channelID: "ch",
+		mm:        &MattermostConfig{URL: "http://mm"},
+	}
+	req := httptest.NewRequest("GET", "/api/agent-config/leader", nil)
+	req.SetPathValue("name", "leader")
+	w := httptest.NewRecorder()
+	d.handleAgentConfig(w, req)
+
+	var resp map[string]string
+	json.NewDecoder(w.Body).Decode(&resp)
+
+	tm := resp["team_members"]
+	if !strings.Contains(tm, "dev=dal-dev-y") {
+		t.Errorf("should include dev, got %q", tm)
+	}
+	if !strings.Contains(tm, "test=dal-test-z") {
+		t.Errorf("should include test, got %q", tm)
+	}
+	if strings.Contains(tm, "leader=") {
+		t.Error("should not include self")
+	}
+}
+
+// ── Container struct 필드 테스트 ─────────────────────────
+
+func TestContainer_AllFieldsPresent(t *testing.T) {
+	c := Container{
+		DalName:     "test",
+		UUID:        "uuid",
+		Player:      "claude",
+		Role:        "member",
+		ContainerID: "cid",
+		Status:      "running",
+		Workspace:   "shared",
+		Skills:      3,
+		BotToken:    "tok",
+		BotUsername:  "dal-test",
+	}
+	if c.BotUsername == "" {
+		t.Fatal("BotUsername must be settable")
+	}
+	if c.Workspace == "" {
+		t.Fatal("Workspace must be settable")
+	}
+}
+
+// ── handleSleep bot cleanup 테스트 ───────────────────────
+
+func TestSleep_DeletesContainerFromMap(t *testing.T) {
+	src := readSource(t, "daemon.go")
+	// handleSleep must eventually call delete(d.containers, name)
+	if !strings.Contains(src, "delete(d.containers, name)") {
+		t.Fatal("handleSleep must call delete(d.containers, name)")
+	}
+}
+
+// ── context watcher 테스트 ───────────────────────────────
+
+func TestContextWatcher_Exists(t *testing.T) {
+	src := readSource(t, "context_watcher.go")
+	if !strings.Contains(src, "startContextWatcher") {
+		t.Fatal("context_watcher.go must have startContextWatcher")
+	}
+}
+
+func TestContextWatcher_IntervalDefined(t *testing.T) {
+	src := readSource(t, "context_watcher.go")
+	if !strings.Contains(src, "contextSyncInterval") {
+		t.Fatal("must define contextSyncInterval")
+	}
+}
+
+func TestContextWatcher_ChecksScript(t *testing.T) {
+	src := readSource(t, "context_watcher.go")
+	if !strings.Contains(src, "context-sync.sh") {
+		t.Fatal("must check for context-sync.sh")
+	}
+}
+
+func TestContextWatcher_ChecksClaudeExtract(t *testing.T) {
+	src := readSource(t, "context_watcher.go")
+	if !strings.Contains(src, "claude-extract") {
+		t.Fatal("must check for claude-extract binary")
+	}
+}

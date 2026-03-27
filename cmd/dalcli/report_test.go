@@ -3,7 +3,9 @@ package main
 import (
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func readSrc(t *testing.T, file string) string {
@@ -172,5 +174,172 @@ func TestBridge_FetchChannelLatestAt(t *testing.T) {
 	src := readSrc(t, "../../internal/bridge/mattermost.go")
 	if !strings.Contains(src, "fetchChannelLatestAt") {
 		t.Fatal("must have fetchChannelLatestAt for initial sinceAt")
+	}
+}
+
+// ── parseInterval 테스트 ─────────────────────────────────
+
+func TestParseInterval_ValidDuration(t *testing.T) {
+	d := parseInterval("1h", 0)
+	if d != time.Hour {
+		t.Fatalf("expected 1h, got %v", d)
+	}
+}
+
+func TestParseInterval_Default(t *testing.T) {
+	d := parseInterval("", 5*time.Minute)
+	if d != 5*time.Minute {
+		t.Fatalf("expected 5m default, got %v", d)
+	}
+}
+
+func TestParseInterval_Invalid(t *testing.T) {
+	d := parseInterval("abc", 10*time.Second)
+	if d != 10*time.Second {
+		t.Fatalf("expected default on invalid, got %v", d)
+	}
+}
+
+// ── containsFailure 테스트 ───────────────────────────────
+
+func TestContainsFailure_Fail(t *testing.T) {
+	if !containsFailure("FAIL test/foo") {
+		t.Fatal("should detect FAIL")
+	}
+}
+
+func TestContainsFailure_Error(t *testing.T) {
+	if !containsFailure("error: something broke") {
+		t.Fatal("should detect error:")
+	}
+}
+
+func TestContainsFailure_Clean(t *testing.T) {
+	if containsFailure("ok all tests passed") {
+		t.Fatal("should not detect failure in clean output")
+	}
+}
+
+// ── extractTask 테스트 ───────────────────────────────────
+
+func TestExtractTask_WithPrefix(t *testing.T) {
+	task := extractTask("작업 지시: go test ./...", "작업 지시:")
+	if task != "go test ./..." {
+		t.Fatalf("expected 'go test ./...', got %q", task)
+	}
+}
+
+func TestExtractTask_NoPrefix(t *testing.T) {
+	task := extractTask("hello world", "작업 지시:")
+	if task != "" {
+		t.Fatalf("expected empty, got %q", task)
+	}
+}
+
+// ── truncate 테스트 ──────────────────────────────────────
+
+func TestTruncate_Short(t *testing.T) {
+	if truncate("hi", 10) != "hi" {
+		t.Fatal("short string should not be truncated")
+	}
+}
+
+func TestTruncate_Long(t *testing.T) {
+	result := truncate("abcdefghij", 5)
+	if !strings.HasSuffix(result, "...") {
+		t.Fatal("truncated string must end with ...")
+	}
+	if len(result) > 8 { // 5 + "..."
+		t.Fatalf("expected max 8 chars (5+...), got %d", len(result))
+	}
+}
+
+// ── isRetryable / isAuthError 테스트 ─────────────────────
+
+func TestIsRetryable_RateLimit_DM(t *testing.T) {
+	if !isRetryable("rate limit exceeded") {
+		t.Fatal("rate limit should be retryable")
+	}
+}
+
+func TestIsRetryable_Normal_DM(t *testing.T) {
+	if isRetryable("normal output") {
+		t.Fatal("normal output should not be retryable")
+	}
+}
+
+func TestIsAuthError_401_DM(t *testing.T) {
+	if !isAuthError("401 authentication error") {
+		t.Fatal("401 should be auth error")
+	}
+}
+
+func TestIsAuthError_Normal_DM(t *testing.T) {
+	if isAuthError("everything is fine") {
+		t.Fatal("normal output should not be auth error")
+	}
+}
+
+// ── isActiveThread 테스트 ────────────────────────────────
+
+func TestIsActiveThread_Found(t *testing.T) {
+	var m sync.Map
+	m.Store("thread-1", true)
+	if !isActiveThread(&m, "thread-1") {
+		t.Fatal("should find active thread")
+	}
+}
+
+func TestIsActiveThread_NotFound(t *testing.T) {
+	var m sync.Map
+	if isActiveThread(&m, "unknown") {
+		t.Fatal("should not find unknown thread")
+	}
+}
+
+// ── isFromLeader 테스트 ──────────────────────────────────
+
+func TestIsFromLeader_LeaderName(t *testing.T) {
+	// isFromLeader checks username contains "leader"
+	src := readSrc(t, "cmd_run.go")
+	if !strings.Contains(src, "func isFromLeader") {
+		t.Fatal("isFromLeader function must exist")
+	}
+}
+
+// ── reportToLeader 테스트 ────────────────────────────────
+
+func TestReportToLeader_UsesTeamMembers(t *testing.T) {
+	src := readSrc(t, "cmd_run.go")
+	idx := strings.Index(src, "func reportToLeader")
+	if idx < 0 {
+		t.Fatal("reportToLeader not found")
+	}
+	fn := src[idx : idx+500]
+	if !strings.Contains(fn, "DAL_TEAM_MEMBERS") {
+		t.Fatal("reportToLeader must read DAL_TEAM_MEMBERS")
+	}
+	if !strings.Contains(fn, "leader") {
+		t.Fatal("reportToLeader must find leader in team members")
+	}
+}
+
+// ── formatReport 테스트 ──────────────────────────────────
+
+func TestFormatReport_Short(t *testing.T) {
+	r := formatReport("hello")
+	if !strings.Contains(r, "hello") {
+		t.Fatal("should contain output")
+	}
+	if !strings.Contains(r, "✅") {
+		t.Fatal("should have success emoji")
+	}
+}
+
+func TestFormatReport_Long(t *testing.T) {
+	long := strings.Repeat("x", 5000)
+	r := formatReport(long)
+	if !strings.Contains(r, "truncated") {
+		t.Fatal("long output should be truncated")
 	}
 }
