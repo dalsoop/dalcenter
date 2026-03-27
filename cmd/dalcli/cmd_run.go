@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -528,6 +529,17 @@ func runClaude(player, task string) (string, error) {
 			"--print", task)
 	}
 
+	// Task timeout: max 5 minutes per execution
+	maxDuration := 5 * time.Minute
+	if env := os.Getenv("DAL_MAX_DURATION"); env != "" {
+		if d, err := time.ParseDuration(env); err == nil {
+			maxDuration = d
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), maxDuration)
+	defer cancel()
+
+	cmd = exec.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
 	cmd.Dir = "/workspace"
 	cmd.Env = append(os.Environ(), "CLAUDE_CODE_ENTRYPOINT=dalcli")
 
@@ -536,6 +548,10 @@ func runClaude(player, task string) (string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()
+
+	if ctx.Err() == context.DeadlineExceeded {
+		return stdout.String(), fmt.Errorf("TIMEOUT: task exceeded %s", maxDuration)
+	}
 
 	if stderr.Len() > 0 {
 		log.Printf("[agent] stderr: %s", truncate(stderr.String(), 200))
