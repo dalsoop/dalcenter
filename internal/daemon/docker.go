@@ -234,6 +234,42 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *
 		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", inboxPath, inboxContainerPath))
 	}
 
+	// Mount wisdom.md (read-only for all)
+	wisdomPath := filepath.Join(localdalRoot, "wisdom.md")
+	if _, err := os.Stat(wisdomPath); err == nil {
+		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", wisdomPath, filepath.Join(containerWorkDir, "wisdom.md")))
+	}
+
+	// Mount now.md from state dir (read-only for member, read-write for leader)
+	nowFile := filepath.Join(stateDir(serviceRepo), "now.md")
+	// Create now.md if it doesn't exist
+	if _, err := os.Stat(nowFile); err != nil {
+		os.WriteFile(nowFile, []byte("# Now\n"), 0644)
+	}
+	if dal.Role == "leader" {
+		args = append(args, "-v", fmt.Sprintf("%s:%s", nowFile, filepath.Join(containerWorkDir, "now.md")))
+	} else {
+		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", nowFile, filepath.Join(containerWorkDir, "now.md")))
+	}
+
+	// Mount history-buffer — rw for member (append session records), ro for leader
+	histBufPath := filepath.Join(stateDir(serviceRepo), "history-buffer")
+	os.MkdirAll(histBufPath, 0755)
+	if dal.Role == "member" {
+		args = append(args, "-v", fmt.Sprintf("%s:%s", histBufPath, filepath.Join(containerWorkDir, "history-buffer")))
+	} else {
+		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", histBufPath, filepath.Join(containerWorkDir, "history-buffer")))
+	}
+
+	// Mount wisdom/inbox — rw for member (drop proposals), ro for leader
+	wisdomInbox := filepath.Join(stateDir(serviceRepo), "wisdom", "inbox")
+	os.MkdirAll(wisdomInbox, 0755)
+	if dal.Role == "member" {
+		args = append(args, "-v", fmt.Sprintf("%s:%s", wisdomInbox, filepath.Join(containerWorkDir, "wisdom-inbox")))
+	} else {
+		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", wisdomInbox, filepath.Join(containerWorkDir, "wisdom-inbox")))
+	}
+
 	// Inject Claude Code settings.json for autoApprove (dal runs unattended)
 	if dal.Player == "claude" {
 		settingsJSON := `{"permissions":{"allow":["Bash(*)","Edit(*)","Write(*)","Read(*)","Glob(*)","Grep(*)","WebFetch(*)","WebSearch","Agent(*)"],"defaultMode":"autoApprove"}}`
