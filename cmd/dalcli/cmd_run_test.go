@@ -405,6 +405,70 @@ func TestMessageRouting_FreeFormFallback(t *testing.T) {
 	}
 }
 
+// ── shouldSkipPR ──
+
+func TestShouldSkipPR(t *testing.T) {
+	tests := []struct {
+		name    string
+		changes string
+		want    bool
+	}{
+		{
+			name:    "only .dal/ files",
+			changes: " M .dal/data/claims.json\n M .dal/config.yaml",
+			want:    true,
+		},
+		{
+			name:    "only .claude/ files",
+			changes: " M .claude/settings.json",
+			want:    true,
+		},
+		{
+			name:    "mixed .dal/ and .claude/",
+			changes: " M .dal/data/claims.json\n M .claude/CLAUDE.md",
+			want:    true,
+		},
+		{
+			name:    "real code changes",
+			changes: " M cmd/dalcli/cmd_run.go\n M .dal/data/claims.json",
+			want:    false,
+		},
+		{
+			name:    "only real code",
+			changes: " M internal/daemon/server.go\nA  README.md",
+			want:    false,
+		},
+		{
+			name:    "new file outside .dal",
+			changes: "?? cmd/dalcli/new_file.go",
+			want:    false,
+		},
+		{
+			name:    "new file inside .dal",
+			changes: "?? .dal/data/new.json",
+			want:    true,
+		},
+		{
+			name:    "renamed file",
+			changes: "R  .dal/old.json -> .dal/new.json",
+			want:    true,
+		},
+		{
+			name:    "empty changes",
+			changes: "",
+			want:    true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldSkipPR(tt.changes)
+			if got != tt.want {
+				t.Errorf("shouldSkipPR(%q) = %v, want %v", tt.changes, got, tt.want)
+			}
+		})
+	}
+}
+
 // ── autoGitWorkflow branch naming ──
 
 func TestAutoGitWorkflow_BranchFormat(t *testing.T) {

@@ -257,7 +257,34 @@ func runAgentLoop(dalName string) error {
 	}
 }
 
+// shouldSkipPR returns true if the changed files don't warrant a PR.
+// Cases: only .dal/ internal files changed, or only .claude/ metadata changed.
+func shouldSkipPR(changes string) bool {
+	lines := strings.Split(changes, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// git status --porcelain format: "XY filename" or "XY filename -> newname"
+		path := line
+		if len(path) > 3 {
+			path = strings.TrimSpace(path[2:])
+		}
+		// Handle renames: "old -> new"
+		if idx := strings.Index(path, " -> "); idx >= 0 {
+			path = path[idx+4:]
+		}
+		if !strings.HasPrefix(path, ".dal/") && !strings.HasPrefix(path, ".claude/") {
+			return false // at least one meaningful file changed
+		}
+	}
+	return true // all changes are internal metadata only
+}
+
 // autoGitWorkflow checks for file changes and creates a branch + commit + PR.
+// If only internal metadata files (.dal/, .claude/) changed, it commits and pushes
+// but skips PR creation to avoid spam.
 func autoGitWorkflow(dalName string) string {
 	// Check if there are changes
 	statusCmd := exec.Command("git", "status", "--porcelain")
@@ -269,6 +296,11 @@ func autoGitWorkflow(dalName string) string {
 
 	changes := strings.TrimSpace(string(statusOut))
 	log.Printf("[git] changes detected:\n%s", changes)
+
+	skipPR := shouldSkipPR(changes)
+	if skipPR {
+		log.Printf("[git] only .dal/.claude files changed — skipping PR creation")
+	}
 
 	// Create branch
 	branch := fmt.Sprintf("dal/%s/%d", dalName, time.Now().Unix())
@@ -298,6 +330,12 @@ func autoGitWorkflow(dalName string) string {
 	// Push
 	if _, err := run("git", "push", "-u", "origin", branch); err != nil {
 		return fmt.Sprintf("⚠️ 푸시 실패: %v", err)
+	}
+
+	// Skip PR if only internal metadata changed
+	if skipPR {
+		run("git", "checkout", "main")
+		return fmt.Sprintf("✅ 커밋+푸시 완료 (브랜치: `%s`)\n📌 내부 파일만 변경되어 PR 생략", branch)
 	}
 
 	// Create PR
