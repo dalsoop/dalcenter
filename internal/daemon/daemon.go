@@ -131,6 +131,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// Start context watcher (extract host Claude session → .dal/context/)
 	go startContextWatcher(ctx, d.serviceRepo)
 
+	// Export MM URL for containers to use
+	if d.mm != nil && d.mm.URL != "" {
+		os.Setenv("DALCENTER_MM_URL", d.mm.URL)
+	}
+
 	// Setup Mattermost channel (repo name = channel name)
 	if d.mm != nil && d.mm.URL != "" {
 		repoName := filepath.Base(d.serviceRepo)

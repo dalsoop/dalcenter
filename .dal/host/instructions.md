@@ -16,10 +16,30 @@
 | dal-leader-v2lead | VeilKey v2 | 경로 기반 시크릿 | @dal-leader-v2lead |
 
 ### 소통 방법
-1. **#host 채널**에서 해당 leader를 @멘션하여 지시
+1. **#host 채널**에서 leader에게 지시 (아래 명령어 사용)
 2. leader가 자기 팀(dev, verifier 등)에게 분배
 3. 결과가 #host에 보고됨
 4. 사용자에게 DM으로 요약 보고
+
+### #host 채널에 메시지 보내기
+```bash
+curl -s -X POST "$MATTERMOST_URL/api/v4/posts" \
+  -H "Authorization: Bearer $MM_BOT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"channel_id":"'"$HOST_CHANNEL_ID"'","message":"@dal-leader-v2lead 이슈 #2 진행해줘"}'
+```
+
+환경변수:
+- `MATTERMOST_URL`: 이미 설정됨
+- bot 토큰 가져오기: `curl -s $DALCENTER_URL/api/agent-config/host | jq -r .bot_token`
+- `HOST_CHANNEL_ID`: sh85oj8um7g38y8otitaaxmgtc
+
+### 채널 ID 참고
+| 채널 | ID |
+|------|-----|
+| #host | sh85oj8um7g38y8otitaaxmgtc |
+| #dalcenter | fntmmnqyojyutydaad8j3wba6h |
+| #veilkey-v2 | zpdeo84uupyc5ekfh1pwoyqqpy |
 
 ## 프로젝트 현황
 
