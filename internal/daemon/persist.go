@@ -58,6 +58,26 @@ func inboxDir(serviceRepo string) string {
 	return dir
 }
 
+// historyBufferDir returns the history buffer directory (git-external).
+func historyBufferDir(serviceRepo string) string {
+	dir := filepath.Join(stateDir(serviceRepo), "history-buffer")
+	os.MkdirAll(dir, 0o755)
+	return dir
+}
+
+// wisdomInboxDir returns the wisdom proposals inbox (git-external).
+func wisdomInboxDir(serviceRepo string) string {
+	dir := filepath.Join(stateDir(serviceRepo), "wisdom", "inbox")
+	os.MkdirAll(dir, 0o755)
+	return dir
+}
+
+// nowPath returns the path to now.md (git-external).
+func nowPath(serviceRepo string) string {
+	dir := stateDir(serviceRepo)
+	return filepath.Join(dir, "now.md")
+}
+
 // loadJSON reads data from a JSON file.
 func loadJSON(path string, target any) error {
 	b, err := os.ReadFile(path)

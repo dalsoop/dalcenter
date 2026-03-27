@@ -70,6 +70,49 @@ func TestInit_Idempotent(t *testing.T) {
 	}
 }
 
+func TestInit_CreatesScribeDal(t *testing.T) {
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, ".dal")
+	os.MkdirAll(root, 0755)
+
+	if err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+
+	cue := filepath.Join(root, "scribe", "dal.cue")
+	if _, err := os.Stat(cue); err != nil {
+		t.Fatal("scribe/dal.cue not created")
+	}
+
+	instr := filepath.Join(root, "scribe", "instructions.md")
+	if _, err := os.Stat(instr); err != nil {
+		t.Fatal("scribe/instructions.md not created")
+	}
+
+	data, _ := os.ReadFile(cue)
+	if !strings.Contains(string(data), "scribe") {
+		t.Error("dal.cue should contain scribe")
+	}
+}
+
+func TestInit_CreatesWisdomMd(t *testing.T) {
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, ".dal")
+	os.MkdirAll(root, 0755)
+
+	if err := Init(root); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(root, "wisdom.md"))
+	if err != nil {
+		t.Fatal("wisdom.md not created")
+	}
+	if !strings.Contains(string(data), "Wisdom") {
+		t.Error("unexpected content")
+	}
+}
+
 func TestInit_DecisionsTemplate(t *testing.T) {
 	tmp := t.TempDir()
 	root := filepath.Join(tmp, ".dal")

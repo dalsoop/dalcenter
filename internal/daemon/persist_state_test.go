@@ -29,6 +29,24 @@ func TestStateDir_DefaultName(t *testing.T) {
 	}
 }
 
+func TestHistoryBufferDir_Creates(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("DALCENTER_STATE_DIR", tmp)
+	dir := historyBufferDir("/path/to/repo")
+	if _, err := os.Stat(dir); err != nil {
+		t.Errorf("history-buffer not created: %v", err)
+	}
+}
+
+func TestWisdomInboxDir_Creates(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("DALCENTER_STATE_DIR", tmp)
+	dir := wisdomInboxDir("/path/to/repo")
+	if _, err := os.Stat(dir); err != nil {
+		t.Errorf("wisdom/inbox not created: %v", err)
+	}
+}
+
 func TestInboxDir_CreatesNestedDirs(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("DALCENTER_STATE_DIR", tmp)
