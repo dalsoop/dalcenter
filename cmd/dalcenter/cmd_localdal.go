@@ -32,6 +32,13 @@ func newServeCmd() *cobra.Command {
 		Short: "Run dalcenter daemon (HTTP API + Docker management)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			root := localdalRoot()
+			// --repo가 지정되면 해당 레포의 .dal/ 사용 (cwd 의존 제거)
+			if serviceRepo != "" {
+				repoRoot := filepath.Join(serviceRepo, ".dal")
+				if _, err := os.Stat(repoRoot); err == nil {
+					root = repoRoot
+				}
+			}
 			var mm *daemon.MattermostConfig
 			if mmURL != "" {
 				mm = &daemon.MattermostConfig{
