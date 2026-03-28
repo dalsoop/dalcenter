@@ -38,6 +38,7 @@ type Daemon struct {
 	claims       *claimStore
 	tasks        *taskStore
 	registry     *Registry
+	startTime    time.Time
 }
 
 // Container tracks a running dal Docker container.
@@ -74,6 +75,7 @@ func New(addr, localdalRoot, serviceRepo string, mm *MattermostConfig) *Daemon {
 		claims:       newClaimStoreWithFile(filepath.Join(dataDir(serviceRepo), "claims.json")),
 		tasks:        newTaskStore(),
 		registry:     newRegistry(serviceRepo),
+		startTime:    time.Now(),
 	}
 }
 
@@ -199,6 +201,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	mux := http.NewServeMux()
 
 	// Read-only endpoints — no auth required
+	mux.HandleFunc("GET /api/health", d.handleHealth)
 	mux.HandleFunc("GET /api/ps", d.handlePs)
 	mux.HandleFunc("GET /api/status", d.handleStatus)
 	mux.HandleFunc("GET /api/status/{name}", d.handleStatusOne)
@@ -241,6 +244,21 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+func (d *Daemon) handleHealth(w http.ResponseWriter, r *http.Request) {
+	d.mu.RLock()
+	dalsRunning := len(d.containers)
+	d.mu.RUnlock()
+
+	dals, _ := localdal.ListDals(d.localdalRoot)
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"status":       "ok",
+		"uptime":       time.Since(d.startTime).Truncate(time.Second).String(),
+		"dals_running": dalsRunning,
+		"repo_count":   len(dals),
+	})
 }
 
 func (d *Daemon) handlePs(w http.ResponseWriter, r *http.Request) {
