@@ -41,10 +41,19 @@ func runAgentLoop(dalName string) error {
 	log.Printf("[agent] starting agent loop for %s", dalName)
 
 	cfg, err := fetchAgentConfig(dalName)
-	if err != nil {
-		return fmt.Errorf("fetch agent config: %w", err)
+	mmAvailable := err == nil && cfg != nil && cfg.BotToken != "" && cfg.MMURL != "" && cfg.ChannelID != ""
+
+	// Auto-task-only mode: MM 없어도 auto_task만 돌릴 수 있음 (scribe 등 백그라운드 dal)
+	autoTask := os.Getenv("DAL_AUTO_TASK")
+	if !mmAvailable && autoTask != "" {
+		log.Printf("[agent] MM not available — entering auto-task-only mode")
+		return runAutoTaskOnly(dalName, autoTask)
 	}
-	if cfg.BotToken == "" || cfg.MMURL == "" || cfg.ChannelID == "" {
+
+	if !mmAvailable {
+		if err != nil {
+			return fmt.Errorf("fetch agent config: %w", err)
+		}
 		return fmt.Errorf("incomplete agent config: mm_url=%q bot_token_set=%v channel_id=%q",
 			cfg.MMURL, cfg.BotToken != "", cfg.ChannelID)
 	}
@@ -73,7 +82,7 @@ func runAgentLoop(dalName string) error {
 	var activeThreads sync.Map
 
 	// Periodic auto-task support: DAL_AUTO_TASK + DAL_AUTO_INTERVAL
-	autoTask := os.Getenv("DAL_AUTO_TASK")
+	autoTask = os.Getenv("DAL_AUTO_TASK")
 	autoInterval := parseInterval(os.Getenv("DAL_AUTO_INTERVAL"), 0)
 	var autoTicker *time.Ticker
 	var autoC <-chan time.Time
@@ -670,6 +679,36 @@ func parseInterval(s string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+// runAutoTaskOnly runs only the auto-task loop without Mattermost.
+// Used by background dals like scribe that don't need MM.
+func runAutoTaskOnly(dalName, autoTask string) error {
+	interval := parseInterval(os.Getenv("DAL_AUTO_INTERVAL"), 30*time.Minute)
+	log.Printf("[agent] auto-task-only mode: interval=%s", interval)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	// Run once immediately
+	log.Printf("[agent] auto-task initial run")
+	output, err := executeTask(autoTask)
+	if err != nil {
+		log.Printf("[agent] auto-task failed: %v", err)
+	} else {
+		log.Printf("[agent] auto-task done (%d bytes)", len(output))
+	}
+
+	for range ticker.C {
+		log.Printf("[agent] auto-task triggered")
+		output, err := executeTask(autoTask)
+		if err != nil {
+			log.Printf("[agent] auto-task failed: %v", err)
+			continue
+		}
+		log.Printf("[agent] auto-task done (%d bytes)", len(output))
+	}
+	return nil
 }
 
 // containsFailure checks if output indicates test/build failures.
