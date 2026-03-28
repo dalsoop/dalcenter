@@ -11,8 +11,8 @@ import (
 func TestClaimStore_Add(t *testing.T) {
 	s := newClaimStore()
 	c := s.Add("dev", ClaimBug, "cargo not found", "command not found: cargo", "build task")
-	if c.ID != "claim-0001" {
-		t.Errorf("expected claim-0001, got %s", c.ID)
+	if !strings.HasPrefix(c.ID, "claim-") || !strings.HasSuffix(c.ID, "-0001") {
+		t.Errorf("expected claim-TIMESTAMP-0001 format, got %s", c.ID)
 	}
 	if c.Status != "open" {
 		t.Errorf("expected open, got %s", c.Status)
@@ -87,8 +87,8 @@ func TestHandleClaim_Post(t *testing.T) {
 	}
 	var claim Claim
 	json.NewDecoder(w.Body).Decode(&claim)
-	if claim.ID != "claim-0001" {
-		t.Errorf("expected claim-0001, got %s", claim.ID)
+	if !strings.HasPrefix(claim.ID, "claim-") || !strings.HasSuffix(claim.ID, "-0001") {
+		t.Errorf("expected claim-TIMESTAMP-0001 format, got %s", claim.ID)
 	}
 }
 

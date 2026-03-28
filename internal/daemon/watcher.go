@@ -11,13 +11,14 @@ import (
 )
 
 const (
-	peerCheckInterval  = 30 * time.Second
-	peerCheckTimeout   = 10 * time.Second
-	peerFailThreshold  = 3
+	peerCheckInterval = 30 * time.Second
+	peerCheckTimeout  = 10 * time.Second
+	peerFailThreshold = 3
 )
 
 // startPeerWatcher periodically checks the peer dalcenter's health endpoint.
-// After peerFailThreshold consecutive failures, it sends a Mattermost alert.
+// For secondary instances, it also handles automatic promotion when the
+// primary becomes unreachable (after peerFailThreshold consecutive failures).
 func (d *Daemon) startPeerWatcher(ctx context.Context) {
 	peerURL := os.Getenv("DALCENTER_PEER_URL")
 	if peerURL == "" {
@@ -26,8 +27,8 @@ func (d *Daemon) startPeerWatcher(ctx context.Context) {
 	}
 	peerURL = strings.TrimRight(peerURL, "/")
 
-	log.Printf("[peer-watcher] started (peer=%s, interval=%s, threshold=%d)",
-		peerURL, peerCheckInterval, peerFailThreshold)
+	log.Printf("[peer-watcher] started (peer=%s, role=%s, interval=%s, threshold=%d)",
+		peerURL, d.haRole, peerCheckInterval, peerFailThreshold)
 
 	client := &http.Client{Timeout: peerCheckTimeout}
 	healthURL := peerURL + "/api/health"
@@ -52,16 +53,58 @@ func (d *Daemon) startPeerWatcher(ctx context.Context) {
 				if consecutiveFails >= peerFailThreshold && !alerted {
 					d.notifyPeerDown(peerURL, err)
 					alerted = true
+
+					// Secondary promotes itself when primary is confirmed down
+					if d.haRole == HARoleSecondary && !d.promoted {
+						d.promote(peerURL)
+					}
 				}
 			} else {
 				if alerted {
 					log.Printf("[peer-watcher] peer recovered after alert")
 					d.notifyPeerRecovered(peerURL)
+
+					// Demote back to secondary if primary has recovered
+					if d.haRole == HARoleSecondary && d.promoted {
+						d.demote(peerURL)
+					}
 				}
 				consecutiveFails = 0
 				alerted = false
 			}
 		}
+	}
+}
+
+// promote transitions a secondary instance to act as primary.
+// It begins accepting write operations and managing dal lifecycles.
+func (d *Daemon) promote(peerURL string) {
+	d.promoted = true
+	msg := fmt.Sprintf(":rotating_light: **dalcenter secondary promoted** — primary `%s` is down, this instance is now handling dal management", peerURL)
+	d.postAlert(msg)
+	log.Printf("[peer-watcher] PROMOTED to active (primary %s unreachable)", peerURL)
+}
+
+// demote transitions a promoted secondary back to standby.
+// The recovered primary resumes dal management.
+func (d *Daemon) demote(peerURL string) {
+	d.promoted = false
+	msg := fmt.Sprintf(":white_check_mark: **dalcenter secondary demoted** — primary `%s` recovered, resuming standby", peerURL)
+	d.postAlert(msg)
+	log.Printf("[peer-watcher] DEMOTED back to standby (primary %s recovered)", peerURL)
+}
+
+// IsActive returns true if this instance should actively manage dals.
+// Primary is always active. Secondary is active only when promoted.
+// Standalone (no HA) is always active.
+func (d *Daemon) IsActive() bool {
+	switch d.haRole {
+	case HARolePrimary:
+		return true
+	case HARoleSecondary:
+		return d.promoted
+	default:
+		return true // standalone
 	}
 }
 

@@ -61,10 +61,9 @@ func (s *claimStore) load() {
 		return // first run or corrupt — start fresh
 	}
 	s.items = items
-	// Restore seq from highest ID
+	// Restore seq from highest ID (supports both old "claim-0001" and new "claim-TIMESTAMP-0001" formats)
 	for _, c := range items {
-		var n int
-		fmt.Sscanf(c.ID, "claim-%d", &n)
+		n := parseTrailingSeq(c.ID)
 		if n > s.seq {
 			s.seq = n
 		}
@@ -92,7 +91,7 @@ func (s *claimStore) Add(dal string, claimType ClaimType, title, detail, context
 	}
 
 	c := Claim{
-		ID:        fmt.Sprintf("claim-%04d", s.seq),
+		ID:        fmt.Sprintf("claim-%s-%04d", time.Now().UTC().Format("20060102T150405"), s.seq),
 		Dal:       dal,
 		Type:      claimType,
 		Title:     title,

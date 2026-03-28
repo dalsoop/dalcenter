@@ -45,7 +45,7 @@ func (s *taskStore) New(dal, task string) *taskResult {
 	defer s.mu.Unlock()
 	s.seq++
 	t := &taskResult{
-		ID:        fmt.Sprintf("task-%04d", s.seq),
+		ID:        fmt.Sprintf("task-%s-%04d", time.Now().UTC().Format("20060102T150405"), s.seq),
 		Dal:       dal,
 		Task:      task,
 		Status:    "running",

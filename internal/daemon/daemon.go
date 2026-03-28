@@ -24,6 +24,15 @@ type MattermostConfig struct {
 	TeamName  string // e.g. "prelik"
 }
 
+// HARole represents this dalcenter instance's role in the HA pair.
+type HARole string
+
+const (
+	HARolePrimary   HARole = "primary"
+	HARoleSecondary HARole = "secondary"
+	HARoleStandalone HARole = "" // no HA configured
+)
+
 // Daemon is the dalcenter HTTP API server.
 type Daemon struct {
 	addr         string
@@ -41,6 +50,8 @@ type Daemon struct {
 	costs        *costStore
 	registry     *Registry
 	startTime    time.Time
+	haRole       HARole // HA role: primary, secondary, or "" (standalone)
+	promoted     bool   // true if secondary was promoted to act as primary
 }
 
 // Container tracks a running dal Docker container.
@@ -63,6 +74,13 @@ func New(addr, localdalRoot, serviceRepo string, mm *MattermostConfig) *Daemon {
 	if token != "" {
 		log.Println("[daemon] API token auth enabled for write endpoints")
 	}
+	role := HARole(os.Getenv("DALCENTER_ROLE"))
+	switch role {
+	case HARolePrimary, HARoleSecondary:
+		log.Printf("[daemon] HA role: %s", role)
+	default:
+		role = HARoleStandalone
+	}
 	inboxDir(serviceRepo)
 	historyBufferDir(serviceRepo)
 	wisdomInboxDir(serviceRepo)
@@ -80,6 +98,7 @@ func New(addr, localdalRoot, serviceRepo string, mm *MattermostConfig) *Daemon {
 		costs:        newCostStoreWithFile(filepath.Join(dataDir(serviceRepo), "costs.json"), orchestrationLogDir(serviceRepo)),
 		registry:     newRegistry(serviceRepo),
 		startTime:    time.Now(),
+		haRole:       role,
 	}
 }
 
@@ -116,6 +135,20 @@ func (d *Daemon) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		token := strings.TrimPrefix(auth, "Bearer ")
 		if auth == "" || token == auth || token != d.apiToken {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// requireActive is middleware that rejects write requests when this instance
+// is a secondary in standby mode. Returns 503 with the peer URL so callers
+// can redirect to the active primary.
+func (d *Daemon) requireActive(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !d.IsActive() {
+			peerURL := os.Getenv("DALCENTER_PEER_URL")
+			http.Error(w, fmt.Sprintf("standby secondary — route to primary: %s", peerURL), http.StatusServiceUnavailable)
 			return
 		}
 		next(w, r)
@@ -214,15 +247,15 @@ func (d *Daemon) Run(ctx context.Context) error {
 	mux.HandleFunc("GET /api/status/{name}", d.handleStatusOne)
 	mux.HandleFunc("POST /api/validate", d.handleValidate)
 	mux.HandleFunc("GET /api/logs/{name}", d.handleLogs)
-	// Write endpoints — require auth when DALCENTER_TOKEN is set
-	mux.HandleFunc("POST /api/wake/{name}", d.requireAuth(d.handleWake))
-	mux.HandleFunc("POST /api/sleep/{name}", d.requireAuth(d.handleSleep))
-	mux.HandleFunc("POST /api/restart/{name}", d.requireAuth(d.handleRestart))
-	mux.HandleFunc("POST /api/sync", d.requireAuth(d.handleSync))
-	mux.HandleFunc("POST /api/message", d.requireAuth(d.handleMessage))
+	// Write endpoints — require auth + active instance (secondary standby rejects)
+	mux.HandleFunc("POST /api/wake/{name}", d.requireActive(d.requireAuth(d.handleWake)))
+	mux.HandleFunc("POST /api/sleep/{name}", d.requireActive(d.requireAuth(d.handleSleep)))
+	mux.HandleFunc("POST /api/restart/{name}", d.requireActive(d.requireAuth(d.handleRestart)))
+	mux.HandleFunc("POST /api/sync", d.requireActive(d.requireAuth(d.handleSync)))
+	mux.HandleFunc("POST /api/message", d.requireActive(d.requireAuth(d.handleMessage)))
 	mux.HandleFunc("GET /api/agent-config/{name}", d.handleAgentConfig)
 	// Direct task execution (works without Mattermost)
-	mux.HandleFunc("POST /api/task", d.requireAuth(d.handleTask))
+	mux.HandleFunc("POST /api/task", d.requireActive(d.requireAuth(d.handleTask)))
 	mux.HandleFunc("GET /api/task/{id}", d.handleTaskStatus)
 	mux.HandleFunc("GET /api/tasks", d.handleTaskList)
 	// Claims — dal feedback to host
@@ -274,12 +307,17 @@ func (d *Daemon) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	dals, _ := localdal.ListDals(d.localdalRoot)
 
-	respondJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"status":       "ok",
 		"uptime":       time.Since(d.startTime).Truncate(time.Second).String(),
 		"dals_running": dalsRunning,
 		"repo_count":   len(dals),
-	})
+	}
+	if d.haRole != HARoleStandalone {
+		resp["ha_role"] = string(d.haRole)
+		resp["promoted"] = d.promoted
+	}
+	respondJSON(w, http.StatusOK, resp)
 }
 
 func (d *Daemon) handlePs(w http.ResponseWriter, r *http.Request) {

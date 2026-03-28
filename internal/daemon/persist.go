@@ -4,9 +4,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -82,6 +84,18 @@ func wisdomInboxDir(serviceRepo string) string {
 func nowPath(serviceRepo string) string {
 	dir := stateDir(serviceRepo)
 	return filepath.Join(dir, "now.md")
+}
+
+// parseTrailingSeq extracts the trailing sequence number from an ID string.
+// Supports both old format "prefix-0001" and new format "prefix-TIMESTAMP-0001".
+func parseTrailingSeq(id string) int {
+	idx := strings.LastIndex(id, "-")
+	if idx < 0 {
+		return 0
+	}
+	var n int
+	fmt.Sscanf(id[idx+1:], "%d", &n)
+	return n
 }
 
 // loadJSON reads data from a JSON file.
