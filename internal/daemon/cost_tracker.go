@@ -137,8 +137,7 @@ func (s *costStore) load() {
 	}
 	s.items = items
 	for _, c := range items {
-		var n int
-		fmt.Sscanf(c.ID, "cost-%d", &n)
+		n := parseTrailingSeq(c.ID)
 		if n > s.seq {
 			s.seq = n
 		}
@@ -161,7 +160,7 @@ func (s *costStore) Add(dal, repo, taskID, model string, input, output int) Cost
 	costUSD := calcCost(model, input, output)
 
 	rec := CostRecord{
-		ID:           fmt.Sprintf("cost-%04d", s.seq),
+		ID:           fmt.Sprintf("cost-%s-%04d", time.Now().UTC().Format("20060102T150405"), s.seq),
 		Dal:          dal,
 		Repo:         repo,
 		TaskID:       taskID,
