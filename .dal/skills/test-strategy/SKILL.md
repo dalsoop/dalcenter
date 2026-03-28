@@ -1,3 +1,6 @@
+---
+id: DAL:SKILL:88a22be2
+---
 # 테스트 전략
 
 dalcenter 테스트 계층 및 원칙.

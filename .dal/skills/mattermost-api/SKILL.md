@@ -1,3 +1,6 @@
+---
+id: DAL:SKILL:690a0c32
+---
 # Mattermost API 통합
 
 dalcenter의 Mattermost 통신 구조.

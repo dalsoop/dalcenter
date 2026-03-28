@@ -1,3 +1,6 @@
+---
+id: DAL:CONTAINER:fe4c2004
+---
 # dalcenter Leader — 라우터 + 판단자
 
 ## Identity

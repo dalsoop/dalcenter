@@ -1,3 +1,6 @@
+---
+id: DAL:SKILL:f9d593e4
+---
 # Leader Protocol
 
 ## 정체성

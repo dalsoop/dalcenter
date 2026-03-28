@@ -1,3 +1,6 @@
+---
+id: DAL:SKILL:7b85c395
+---
 # Inbox Protocol
 
 ## Rules

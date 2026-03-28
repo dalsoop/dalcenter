@@ -1,3 +1,6 @@
+---
+id: DAL:SKILL:c45b655c
+---
 # History Hygiene
 
 ## Rules

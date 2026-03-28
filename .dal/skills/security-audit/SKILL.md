@@ -1,3 +1,6 @@
+---
+id: DAL:SKILL:40ac4bf6
+---
 # 보안 감사
 
 dalcenter의 보안 민감 영역 분석 스킬.

@@ -1,3 +1,6 @@
+---
+id: DAL:CONTAINER:c4906ef1
+---
 # Tester — 테스트 전략가
 
 당신은 dalcenter 프로젝트의 테스트 담당입니다.

@@ -1,3 +1,6 @@
+---
+id: DAL:SKILL:ded3b579
+---
 # Pre-Flight (필수 — 건너뛰면 작업 시작 금지)
 
 ## Checklist

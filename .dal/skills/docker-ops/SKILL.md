@@ -1,3 +1,6 @@
+---
+id: DAL:SKILL:56282a33
+---
 # Docker 운영
 
 dalcenter의 Docker 컨테이너 관리 관련 지식.

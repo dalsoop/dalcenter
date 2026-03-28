@@ -1,3 +1,6 @@
+---
+id: DAL:SKILL:ab4a9fad
+---
 # Go CI 파이프라인
 
 Go 프로젝트의 CI 검증을 수행하는 스킬.
