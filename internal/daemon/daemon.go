@@ -38,6 +38,7 @@ type Daemon struct {
 	claims       *claimStore
 	tasks        *taskStore
 	feedback     *feedbackStore
+	costs        *costStore
 	registry     *Registry
 	startTime    time.Time
 }
@@ -76,6 +77,7 @@ func New(addr, localdalRoot, serviceRepo string, mm *MattermostConfig) *Daemon {
 		claims:       newClaimStoreWithFile(filepath.Join(dataDir(serviceRepo), "claims.json")),
 		tasks:        newTaskStore(),
 		feedback:     newFeedbackStoreWithFile(filepath.Join(dataDir(serviceRepo), "feedback.json")),
+		costs:        newCostStoreWithFile(filepath.Join(dataDir(serviceRepo), "costs.json"), orchestrationLogDir(serviceRepo)),
 		registry:     newRegistry(serviceRepo),
 		startTime:    time.Now(),
 	}
@@ -232,6 +234,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /api/feedback", d.handleFeedback)
 	mux.HandleFunc("GET /api/feedback", d.handleFeedbackList)
 	mux.HandleFunc("GET /api/feedback/stats", d.handleFeedbackStats)
+	// Cost tracking
+	mux.HandleFunc("POST /api/cost", d.requireAuth(d.handleCostRecord))
+	mux.HandleFunc("GET /api/costs", d.handleCostList)
+	mux.HandleFunc("GET /api/costs/summary", d.handleCostSummary)
 	// Escalation endpoints
 	mux.HandleFunc("POST /api/escalate", d.requireAuth(d.handleEscalate))
 	mux.HandleFunc("GET /api/escalations", d.handleEscalations)

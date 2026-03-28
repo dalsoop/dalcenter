@@ -223,6 +223,14 @@ func (d *Daemon) execTaskInContainer(c *Container, tr *taskResult) {
 		// Record feedback
 		d.feedback.Add(c.DalName, tr.ID, tr.Task, "failure", tr.Error, 0, durationMs)
 
+		// Parse and record token usage even on failure
+		usage := ParseTokenUsage(tr.Output + "\n" + tr.Error)
+		if usage.InputTokens > 0 || usage.OutputTokens > 0 {
+			model := c.Player
+			d.costs.Add(c.DalName, d.serviceRepo, tr.ID, model, usage.InputTokens, usage.OutputTokens)
+			log.Printf("[cost-tracker] %s (failed): input=%d output=%d model=%s", tr.ID, usage.InputTokens, usage.OutputTokens, model)
+		}
+
 		// Dispatch webhook
 		dispatchWebhook(WebhookEvent{
 			Event:     "task_failed",
@@ -243,6 +251,14 @@ func (d *Daemon) execTaskInContainer(c *Container, tr *taskResult) {
 
 		// Record feedback
 		d.feedback.Add(c.DalName, tr.ID, tr.Task, "success", "", tr.GitChanges, durationMs)
+
+		// Parse and record token usage
+		usage := ParseTokenUsage(tr.Output)
+		if usage.InputTokens > 0 || usage.OutputTokens > 0 {
+			model := c.Player // default to player name
+			d.costs.Add(c.DalName, d.serviceRepo, tr.ID, model, usage.InputTokens, usage.OutputTokens)
+			log.Printf("[cost-tracker] %s: input=%d output=%d model=%s", tr.ID, usage.InputTokens, usage.OutputTokens, model)
+		}
 
 		log.Printf("[task] %s done (%d bytes, verified=%s, changes=%d)", tr.ID, len(tr.Output), tr.Verified, tr.GitChanges)
 
