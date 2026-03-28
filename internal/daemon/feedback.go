@@ -59,8 +59,7 @@ func (s *feedbackStore) load() {
 	}
 	s.items = items
 	for _, f := range items {
-		var n int
-		fmt.Sscanf(f.ID, "fb-%d", &n)
+		n := parseTrailingSeq(f.ID)
 		if n > s.seq {
 			s.seq = n
 		}
@@ -87,7 +86,7 @@ func (s *feedbackStore) Add(dal, taskID, task, result, errMsg string, gitChanges
 	}
 
 	fb := Feedback{
-		ID:         fmt.Sprintf("fb-%04d", s.seq),
+		ID:         fmt.Sprintf("fb-%s-%04d", time.Now().UTC().Format("20060102T150405"), s.seq),
 		Dal:        dal,
 		TaskID:     taskID,
 		Task:       task,
