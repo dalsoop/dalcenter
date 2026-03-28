@@ -4,18 +4,39 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
 )
 
+// softServeAlreadyRunning checks if a soft-serve instance is already listening
+// on the SSH port. Used to avoid port conflicts when multiple dalcenter
+// instances share the same host.
+func softServeAlreadyRunning() bool {
+	port := softServeSSHPort()
+	conn, err := net.DialTimeout("tcp", "localhost:"+port, 2*time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
 // startSoftServe starts soft-serve as a child process.
-// Returns nil cmd if soft-serve binary not found (non-fatal).
+// Returns nil cmd if soft-serve binary not found or another instance is
+// already listening on the SSH port (non-fatal in both cases).
 func startSoftServe(ctx context.Context) (*exec.Cmd, error) {
 	softBin, err := exec.LookPath("soft")
 	if err != nil {
 		return nil, nil // not installed, skip
+	}
+
+	// Skip if another dalcenter instance already started soft-serve.
+	if softServeAlreadyRunning() {
+		log.Printf("[soft-serve] already running on port %s — skipping start", softServeSSHPort())
+		return nil, nil
 	}
 
 	dataPath := softServeDataPath()
@@ -34,7 +55,7 @@ func startSoftServe(ctx context.Context) (*exec.Cmd, error) {
 
 	// Wait briefly for soft-serve to be ready
 	time.Sleep(2 * time.Second)
-	log.Printf("[soft-serve] data=%s", dataPath)
+	log.Printf("[soft-serve] started (pid=%d, data=%s)", cmd.Process.Pid, dataPath)
 
 	return cmd, nil
 }

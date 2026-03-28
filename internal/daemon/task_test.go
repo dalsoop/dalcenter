@@ -11,8 +11,9 @@ import (
 func TestTaskStore_New(t *testing.T) {
 	s := newTaskStore()
 	tr := s.New("dev", "go test ./...")
-	if tr.ID != "task-0001" {
-		t.Errorf("expected task-0001, got %s", tr.ID)
+	// ID format: task-YYYYMMDDTHHMMSS-NNNN
+	if !strings.HasPrefix(tr.ID, "task-") || !strings.HasSuffix(tr.ID, "-0001") {
+		t.Errorf("expected task-TIMESTAMP-0001 format, got %s", tr.ID)
 	}
 	if tr.Dal != "dev" {
 		t.Errorf("expected dal=dev, got %s", tr.Dal)

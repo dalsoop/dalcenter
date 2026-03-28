@@ -40,8 +40,7 @@ func newEscalationStoreWithFile(path string) *escalationStore {
 	if err := loadJSON(path, &items); err == nil {
 		s.items = items
 		for _, e := range items {
-			var n int
-			fmt.Sscanf(e.ID, "esc-%d", &n)
+			n := parseTrailingSeq(e.ID)
 			if n > s.seq {
 				s.seq = n
 			}
@@ -72,7 +71,7 @@ func (s *escalationStore) Add(dal, task, errorClass, output string) Escalation {
 	}
 
 	esc := Escalation{
-		ID:         fmt.Sprintf("esc-%04d", s.seq),
+		ID:         fmt.Sprintf("esc-%s-%04d", time.Now().UTC().Format("20060102T150405"), s.seq),
 		Dal:        dal,
 		Task:       task,
 		ErrorClass: errorClass,
