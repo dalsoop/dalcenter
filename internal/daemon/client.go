@@ -250,6 +250,30 @@ func (c *Client) ClaimRespond(id, status, response string) error {
 	return nil
 }
 
+// Escalate sends an escalation to the dalcenter daemon.
+func (c *Client) Escalate(dal, task, errorClass, output string) error {
+	body := fmt.Sprintf(`{"dal":%q,"task":%q,"error_class":%q,"output":%q}`,
+		dal, task, errorClass, output)
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/escalate", strings.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiToken)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("daemon unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("escalate failed: %s", strings.TrimSpace(string(b)))
+	}
+	return nil
+}
+
 // TaskResult holds the response from a direct task execution.
 type TaskResult struct {
 	ID     string `json:"task_id,omitempty"`

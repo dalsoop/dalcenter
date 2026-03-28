@@ -105,6 +105,7 @@ func runAgentLoop(dalName string) error {
 	}
 
 	msgC := mm.Listen()
+	var autoTaskConsecutiveFails int
 
 	for {
 		var msg bridge.Message
@@ -121,13 +122,19 @@ func runAgentLoop(dalName string) error {
 		}
 
 		if isAuto {
+			if shouldSkipIfNoChange() {
+				log.Printf("[agent] auto-task skipped: no git changes")
+				continue
+			}
 			log.Printf("[agent] auto-task triggered")
 			output, err := executeTask(autoTask)
 			if err != nil {
 				log.Printf("[agent] auto-task failed: %v", err)
 				mm.Send(bridge.Message{Content: fmt.Sprintf("⚠️ 자동 검증 실패: %v\n```\n%s\n```", err, truncate(output, 500))})
+				autoTaskConsecutiveFails = escalateAutoTaskFailure(autoTaskConsecutiveFails, dalName, autoTask, fmt.Sprintf("%v: %s", err, truncate(output, 500)))
 				continue
 			}
+			autoTaskConsecutiveFails = 0
 			log.Printf("[agent] auto-task done (%d bytes)", len(output))
 
 			// If output contains FAIL or error indicators → create GitHub issue
@@ -784,22 +791,36 @@ func runAutoTaskOnly(dalName, autoTask string) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	var consecutiveFails int
+
 	// Run once immediately
-	log.Printf("[agent] auto-task initial run")
-	output, err := executeTask(autoTask)
-	if err != nil {
-		log.Printf("[agent] auto-task failed: %v", err)
+	if shouldSkipIfNoChange() {
+		log.Printf("[agent] auto-task initial run skipped: no git changes")
 	} else {
-		log.Printf("[agent] auto-task done (%d bytes)", len(output))
+		log.Printf("[agent] auto-task initial run")
+		output, err := executeTask(autoTask)
+		if err != nil {
+			log.Printf("[agent] auto-task failed: %v", err)
+			consecutiveFails = escalateAutoTaskFailure(consecutiveFails, dalName, autoTask, fmt.Sprintf("%v: %s", err, truncate(output, 500)))
+		} else {
+			consecutiveFails = 0
+			log.Printf("[agent] auto-task done (%d bytes)", len(output))
+		}
 	}
 
 	for range ticker.C {
+		if shouldSkipIfNoChange() {
+			log.Printf("[agent] auto-task skipped: no git changes")
+			continue
+		}
 		log.Printf("[agent] auto-task triggered")
 		output, err := executeTask(autoTask)
 		if err != nil {
 			log.Printf("[agent] auto-task failed: %v", err)
+			consecutiveFails = escalateAutoTaskFailure(consecutiveFails, dalName, autoTask, fmt.Sprintf("%v: %s", err, truncate(output, 500)))
 			continue
 		}
+		consecutiveFails = 0
 		log.Printf("[agent] auto-task done (%d bytes)", len(output))
 	}
 	return nil
@@ -832,6 +853,43 @@ func createGitHubIssue(dalName, output string) string {
 	url := strings.TrimSpace(string(out))
 	log.Printf("[agent] created issue: %s", url)
 	return url
+}
+
+// hasGitChanges checks if there are uncommitted changes via git diff --stat HEAD.
+func hasGitChanges() bool {
+	cmd := exec.Command("git", "diff", "--stat", "HEAD")
+	cmd.Dir = "/workspace"
+	out, err := cmd.Output()
+	if err != nil {
+		log.Printf("[agent] git diff --stat failed: %v", err)
+		return true // assume changes on error to avoid skipping
+	}
+	return strings.TrimSpace(string(out)) != ""
+}
+
+// shouldSkipIfNoChange returns true when skip-if-no-change is enabled and there are no git changes.
+func shouldSkipIfNoChange() bool {
+	return strings.EqualFold(os.Getenv("DAL_AUTO_SKIP_IF_NO_CHANGE"), "true") && !hasGitChanges()
+}
+
+// escalateAutoTaskFailure increments fail count and escalates after 2 consecutive failures.
+// Returns the updated consecutive fail count.
+func escalateAutoTaskFailure(consecutiveFails int, dalName, autoTask, errMsg string) int {
+	consecutiveFails++
+	if consecutiveFails >= 2 {
+		log.Printf("[agent] auto-task failed %d times consecutively, escalating", consecutiveFails)
+		client, err := daemon.NewClient()
+		if err != nil {
+			log.Printf("[agent] escalate: cannot create client: %v", err)
+			return consecutiveFails
+		}
+		if err := client.Escalate(dalName, autoTask, "consecutive_auto_task_failure", errMsg); err != nil {
+			log.Printf("[agent] escalate failed: %v", err)
+		} else {
+			log.Printf("[agent] escalated to leader")
+		}
+	}
+	return consecutiveFails
 }
 
 // isFromLeader checks if a message sender is a leader bot (by checking dal- prefix + leader keyword)
