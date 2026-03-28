@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +22,15 @@ func startSoftServe(ctx context.Context) (*exec.Cmd, error) {
 	dataPath := softServeDataPath()
 	if err := os.MkdirAll(dataPath, 0755); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
+	}
+
+	// Check if port is already in use (another instance running)
+	port := softServeSSHPort()
+	conn, err := net.Dial("tcp", "localhost:"+port)
+	if err == nil {
+		conn.Close()
+		log.Printf("[soft-serve] already running on port %s, skipping", port)
+		return nil, nil
 	}
 
 	cmd := exec.CommandContext(ctx, softBin, "serve")
