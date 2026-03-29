@@ -12,6 +12,21 @@ import (
 	"time"
 )
 
+func installFakeCredentialOpsCommands(t *testing.T) {
+	t.Helper()
+
+	dir := t.TempDir()
+	for _, name := range []string{"proxmox-host-setup", "pve-sync-creds"} {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+			t.Fatalf("write fake command %s: %v", name, err)
+		}
+	}
+
+	oldPath := os.Getenv("PATH")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+oldPath)
+}
+
 func TestParseCredentialSyncContext(t *testing.T) {
 	req, ok := parseCredentialSyncContext("kind=credential_sync&player=claude&source=dalcli&source_dal=verifier&vmid=105")
 	if !ok {
@@ -41,6 +56,8 @@ func TestReserveCredentialSync_Dedupes(t *testing.T) {
 }
 
 func TestRunCredentialSync_RunsExpectedCommandsAndResolvesClaim(t *testing.T) {
+	installFakeCredentialOpsCommands(t)
+
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	credDir := filepath.Join(home, ".claude")
@@ -93,6 +110,8 @@ func TestRunCredentialSync_RunsExpectedCommandsAndResolvesClaim(t *testing.T) {
 }
 
 func TestHandleClaim_CredentialSyncTriggersOps(t *testing.T) {
+	installFakeCredentialOpsCommands(t)
+
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	credDir := filepath.Join(home, ".claude")

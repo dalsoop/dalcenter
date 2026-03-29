@@ -147,13 +147,13 @@ func TestTimeout_CommandContext(t *testing.T) {
 
 // ── 크로스 채널 폴링 테스트 ──────────────────────────────
 
-func TestBridge_PollsAllChannelTypes(t *testing.T) {
+func TestBridge_PollsOnlyDirectMessageChannels(t *testing.T) {
 	src := readSrc(t, "../../internal/bridge/mattermost.go")
-	// DM + 일반 채널 + 비공개 채널 모두 폴링
-	for _, chType := range []string{`"D"`, `"O"`, `"P"`} {
-		if !strings.Contains(src, chType) {
-			t.Fatalf("bridge must poll channel type %s", chType)
-		}
+	if !strings.Contains(src, `ch.Type == "D"`) {
+		t.Fatal("bridge must poll direct-message channels")
+	}
+	if strings.Contains(src, `ch.Type == "O"`) || strings.Contains(src, `ch.Type == "P"`) {
+		t.Fatal("bridge must not poll open/private project channels as extra bot inboxes")
 	}
 }
 
