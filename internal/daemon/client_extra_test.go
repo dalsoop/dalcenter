@@ -99,3 +99,28 @@ func TestClient_Logs_Content(t *testing.T) {
 		t.Error("logs should not be empty")
 	}
 }
+
+func TestClient_RefreshAgentToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/agent-config/leader/refresh-token" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(map[string]string{
+			"dal_name":  "leader",
+			"bot_token": "fresh-token",
+		})
+	}))
+	defer srv.Close()
+
+	os.Setenv("DALCENTER_URL", srv.URL)
+	defer os.Unsetenv("DALCENTER_URL")
+
+	c, _ := NewClient()
+	resp, err := c.RefreshAgentToken("leader")
+	if err != nil {
+		t.Fatalf("RefreshAgentToken: %v", err)
+	}
+	if resp["bot_token"] != "fresh-token" {
+		t.Fatalf("bot_token = %q", resp["bot_token"])
+	}
+}

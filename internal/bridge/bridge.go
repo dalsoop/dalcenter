@@ -19,5 +19,6 @@ type Bridge interface {
 	Listen() <-chan Message
 	Errors() <-chan error
 	Send(msg Message) error
+	UpdateToken(token string)
 	Close() error
 }
