@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -275,6 +276,18 @@ func runAgentLoop(dalName string) error {
 
 		log.Printf("[agent] message: %s", truncate(task, 80))
 
+		// Build context for thread replies
+		prompt := task
+		if isThreadReply && !isDirectMention {
+			prompt = buildThreadContext(mm, msg, dalName)
+		}
+		if handled, err := handleCredentialStatusQuery(dalName, prompt, threadID, msg.Channel, mm); err != nil {
+			log.Printf("[agent] credential status reply failed: %v", err)
+		} else if handled {
+			appendHistoryBuffer(dalName, prompt, "credential status reply", "완료")
+			continue
+		}
+
 		externalURL := os.Getenv("DALCENTER_EXTERNAL_URL")
 		var statusMsg string
 		if externalURL != "" {
@@ -288,12 +301,6 @@ func runAgentLoop(dalName string) error {
 			Channel: msg.Channel,
 			ReplyTo: threadID,
 		})
-
-		// Build context for thread replies
-		prompt := task
-		if isThreadReply && !isDirectMention {
-			prompt = buildThreadContext(mm, msg, dalName)
-		}
 
 		output, err := executeTask(prompt)
 		if err != nil {
@@ -645,6 +652,126 @@ func notifyCredentialRefresh(dalName string) {
 		log.Printf("[agent] credential refresh notice failed for %s: %v", dalName, err)
 	}
 	log.Printf("[agent] credential refresh requested for %s", dalName)
+}
+
+func handleCredentialStatusQuery(dalName, prompt, threadID, channel string, mm *bridge.MattermostBridge) (bool, error) {
+	if !isCredentialStatusQuery(prompt) {
+		return false, nil
+	}
+	reply, err := buildCredentialStatusReply(dalName)
+	if err != nil {
+		return false, err
+	}
+	mm.Send(bridge.Message{
+		Content: reply,
+		Channel: channel,
+		ReplyTo: threadID,
+	})
+	return true, nil
+}
+
+func isCredentialStatusQuery(prompt string) bool {
+	lower := strings.ToLower(prompt)
+	keywords := []string{
+		"credential", "크리덴셜", "sync-dal-creds", "pve-sync-creds",
+		"auth login", "expiresat", "expires_at", "token exp", "token 만료",
+		"credential 만료", "토큰 만료", "호스트 전용", "인증 갱신",
+	}
+	for _, keyword := range keywords {
+		if strings.Contains(lower, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func buildCredentialStatusReply(dalName string) (string, error) {
+	client, err := dalcenterClientOrFallback()
+	if err != nil {
+		return "", err
+	}
+	claims, err := client.Claims("")
+	if err != nil {
+		return "", err
+	}
+
+	var openCredentialClaims int
+	var latestResolved *daemon.Claim
+	for i := range claims {
+		claim := claims[i]
+		if !isCredentialClaimRecord(claim) {
+			continue
+		}
+		if claim.Status == "open" || claim.Status == "acknowledged" {
+			openCredentialClaims++
+		}
+		if claim.Status == "resolved" {
+			if latestResolved == nil || claim.Timestamp.After(latestResolved.Timestamp) {
+				copied := claim
+				latestResolved = &copied
+			}
+		}
+	}
+
+	lines := []string{
+		"자동 credential 상태만 기준으로 답합니다.",
+		fmt.Sprintf("현재 daemon 기준 open credential claim: %d", openCredentialClaims),
+	}
+	if latestResolved != nil {
+		lines = append(lines, fmt.Sprintf("최근 credential sync: %s %s", latestResolved.ID, latestResolved.Response))
+	}
+	if claudeExp := readCredentialExpiry(filepath.Join(userHomeDir(), ".claude", ".credentials.json")); claudeExp != "" {
+		lines = append(lines, "claude expiresAt: "+claudeExp)
+	}
+	if codexExp := readCredentialExpiry(filepath.Join(userHomeDir(), ".codex", "auth.json")); codexExp != "" {
+		lines = append(lines, "codex access token exp: "+codexExp)
+	}
+	lines = append(lines, "이 주제는 일반 문서 추론이 아니라 credential-ops 상태로만 안내합니다.")
+	lines = append(lines, fmt.Sprintf("%s 기준으로는 host bridge가 자동 sync를 처리합니다.", dalName))
+	return strings.Join(lines, "\n"), nil
+}
+
+func isCredentialClaimRecord(claim daemon.Claim) bool {
+	if strings.Contains(claim.Context, "kind=credential_sync") {
+		return true
+	}
+	if strings.Contains(claim.Title, "credential 만료") {
+		return true
+	}
+	return strings.Contains(claim.Detail, "credential/auth failed") || strings.Contains(claim.Detail, "auth failed")
+}
+
+func readCredentialExpiry(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	if strings.Contains(string(data), "claudeAiOauth") {
+		var claude struct {
+			ClaudeAiOauth struct {
+				ExpiresAt int64 `json:"expiresAt"`
+			} `json:"claudeAiOauth"`
+		}
+		if json.Unmarshal(data, &claude) == nil && claude.ClaudeAiOauth.ExpiresAt > 0 {
+			return time.UnixMilli(claude.ClaudeAiOauth.ExpiresAt).UTC().Format(time.RFC3339)
+		}
+	}
+	if strings.Contains(string(data), "expires_at") {
+		var codex struct {
+			Tokens struct {
+				ExpiresAt string `json:"expires_at"`
+			} `json:"tokens"`
+		}
+		if json.Unmarshal(data, &codex) == nil && codex.Tokens.ExpiresAt != "" {
+			return codex.Tokens.ExpiresAt
+		}
+	}
+	return ""
+}
+
+func userHomeDir() string {
+	home, _ := os.UserHomeDir()
+	return home
 }
 
 // fetchCentralProvider checks the dalcenter daemon's centralized provider circuit.

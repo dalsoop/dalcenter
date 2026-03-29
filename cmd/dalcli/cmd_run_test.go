@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -272,6 +273,82 @@ func TestBuildThreadContext_WithAPI(t *testing.T) {
 	}
 	if !strings.Contains(ctx, "상대방") {
 		t.Error("should identify others")
+	}
+}
+
+func TestIsCredentialStatusQuery(t *testing.T) {
+	tests := []struct {
+		name   string
+		prompt string
+		want   bool
+	}{
+		{"korean", "이거 credential 만료 맞아?", true},
+		{"script name", "sync-dal-creds.sh 왜 뜨지", true},
+		{"host sync", "pve-sync-creds 해야 하나", true},
+		{"normal task", "가야 런타임 테스트해봐", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isCredentialStatusQuery(tt.prompt); got != tt.want {
+				t.Fatalf("isCredentialStatusQuery(%q) = %v, want %v", tt.prompt, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildCredentialStatusReply(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("DALCENTER_URL", "")
+
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0755); err != nil {
+		t.Fatalf("mkdir claude dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0755); err != nil {
+		t.Fatalf("mkdir codex dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".claude", ".credentials.json"), []byte(`{"claudeAiOauth":{"expiresAt":1774810659871}}`), 0600); err != nil {
+		t.Fatalf("write claude cred: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".codex", "auth.json"), []byte(`{"tokens":{"expires_at":"2026-03-30T14:59:24Z"}}`), 0600); err != nil {
+		t.Fatalf("write codex cred: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/claims" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"claims": []map[string]any{
+				{
+					"id":         "claim-0019",
+					"title":      "credential 만료로 호스트 sync 필요",
+					"detail":     "claude auth failed",
+					"context":    "kind=credential_sync&player=claude",
+					"status":     "resolved",
+					"timestamp":  "2026-03-29T13:39:43Z",
+					"responded_at": "2026-03-29T13:39:48Z",
+					"response":   "[credential-ops] 완료 player=claude vmid=105 mtime=2026-03-29T13:39:47Z",
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+	t.Setenv("DALCENTER_URL", srv.URL)
+
+	reply, err := buildCredentialStatusReply("leader")
+	if err != nil {
+		t.Fatalf("buildCredentialStatusReply: %v", err)
+	}
+	if !strings.Contains(reply, "open credential claim: 0") {
+		t.Fatalf("reply missing open count: %s", reply)
+	}
+	if !strings.Contains(reply, "claude expiresAt: 2026-03-29T18:57:39Z") {
+		t.Fatalf("reply missing claude expiry: %s", reply)
+	}
+	if !strings.Contains(reply, "codex access token exp: 2026-03-30T14:59:24Z") {
+		t.Fatalf("reply missing codex expiry: %s", reply)
 	}
 }
 
