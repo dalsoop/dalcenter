@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -322,14 +323,14 @@ func TestBuildCredentialStatusReply(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"claims": []map[string]any{
 				{
-					"id":         "claim-0019",
-					"title":      "credential 만료로 호스트 sync 필요",
-					"detail":     "claude auth failed",
-					"context":    "kind=credential_sync&player=claude",
-					"status":     "resolved",
-					"timestamp":  "2026-03-29T13:39:43Z",
+					"id":           "claim-0019",
+					"title":        "credential 만료로 호스트 sync 필요",
+					"detail":       "claude auth failed",
+					"context":      "kind=credential_sync&player=claude",
+					"status":       "resolved",
+					"timestamp":    "2026-03-29T13:39:43Z",
 					"responded_at": "2026-03-29T13:39:48Z",
-					"response":   "[credential-ops] 완료 player=claude vmid=105 mtime=2026-03-29T13:39:47Z",
+					"response":     "[credential-ops] 완료 player=claude vmid=105 mtime=2026-03-29T13:39:47Z",
 				},
 			},
 		})
@@ -349,6 +350,25 @@ func TestBuildCredentialStatusReply(t *testing.T) {
 	}
 	if !strings.Contains(reply, "codex access token exp: 2026-03-30T14:59:24Z") {
 		t.Fatalf("reply missing codex expiry: %s", reply)
+	}
+	if !strings.Contains(reply, "daemon claim 상태(open/resolved/rejected)로만 자동 sync 진행 여부를 판단합니다.") {
+		t.Fatalf("reply missing neutral sync guidance: %s", reply)
+	}
+}
+
+func TestCredentialStatusQueryInput_UsesLatestTaskOnly(t *testing.T) {
+	task := "dalcenter 에서 원인 찾아오봐"
+	threadPrompt := `[상대방]: [leader] ⚠️ credential 만료. 호스트에서 sync-dal-creds.sh 실행 필요.
+
+---
+너의 이름: leader. 위 대화 맥락을 보고 마지막 메시지에 응답하라. 간결하게.`
+
+	got := credentialStatusQueryInput(task, threadPrompt)
+	if got != task {
+		t.Fatalf("credentialStatusQueryInput() = %q, want latest task %q", got, task)
+	}
+	if isCredentialStatusQuery(got) {
+		t.Fatalf("latest task should not be forced into credential query mode: %q", got)
 	}
 }
 
@@ -411,6 +431,60 @@ func TestShouldIgnoreDalBotMessage(t *testing.T) {
 	}
 }
 
+func TestShouldIgnoreOperationalDalBotMessage(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v4/users/bot-reviewer", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]string{"id": "bot-reviewer", "username": "dal-reviewer-emotio"})
+	})
+	mux.HandleFunc("/api/v4/users/human-devops", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]string{"id": "human-devops", "username": "devops"})
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	mm := &bridge.MattermostBridge{URL: srv.URL, Token: "tok"}
+
+	tests := []struct {
+		name string
+		msg  bridge.Message
+		want bool
+	}{
+		{
+			name: "dal bot operational notice",
+			msg: bridge.Message{
+				From:    "bot-reviewer",
+				Content: "@dal-leader [leader] ⚠️ credential 만료. 호스트에서 sync-dal-creds.sh 실행 필요.",
+			},
+			want: true,
+		},
+		{
+			name: "dal bot normal message",
+			msg: bridge.Message{
+				From:    "bot-reviewer",
+				Content: "@dal-leader 리뷰 끝났어",
+			},
+			want: false,
+		},
+		{
+			name: "human operational text",
+			msg: bridge.Message{
+				From:    "human-devops",
+				Content: "sync-dal-creds.sh 왜 뜨지",
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldIgnoreOperationalDalBotMessage(tt.msg, mm); got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsDirectedAtDifferentDal(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -454,6 +528,46 @@ func TestIsOperationalNoticeMessage(t *testing.T) {
 				t.Fatalf("got %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestHandleCredentialStatusQuery_FallbackOnStatusError(t *testing.T) {
+	var sentBody string
+	mmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v4/posts" {
+			http.NotFound(w, r)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		sentBody = string(body)
+		json.NewEncoder(w).Encode(map[string]string{"id": "post-1"})
+	}))
+	defer mmServer.Close()
+
+	dcServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/claims" {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer dcServer.Close()
+
+	t.Setenv("DALCENTER_URL", dcServer.URL)
+	mm := &bridge.MattermostBridge{URL: mmServer.URL, Token: "tok", ChannelID: "ch-1"}
+
+	handled, err := handleCredentialStatusQuery("leader", "sync-dal-creds.sh 왜 뜨지", "root-1", "ch-1", mm)
+	if err != nil {
+		t.Fatalf("handleCredentialStatusQuery: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected query to be handled")
+	}
+	if !strings.Contains(sentBody, "credential-ops 상태 조회 실패") {
+		t.Fatalf("expected fallback reply, body=%s", sentBody)
+	}
+	if !strings.Contains(sentBody, "일반 작업으로 넘기지 않고 여기서 중단합니다.") {
+		t.Fatalf("expected deterministic stop message, body=%s", sentBody)
 	}
 }
 

@@ -238,6 +238,10 @@ func runAgentLoop(dalName string) error {
 			log.Printf("[agent] skipped dal-bot follow-up: %s", truncate(msg.Content, 60))
 			continue
 		}
+		if shouldIgnoreOperationalDalBotMessage(msg, mm) {
+			log.Printf("[agent] skipped operational dal-bot message: %s", truncate(msg.Content, 60))
+			continue
+		}
 		if isDM && isDirectedAtDifferentDal(msg.Content, mention, legacyMention, altMention) {
 			log.Printf("[agent] skipped DM for different dal: %s", truncate(msg.Content, 60))
 			continue
@@ -281,7 +285,7 @@ func runAgentLoop(dalName string) error {
 		if isThreadReply && !isDirectMention {
 			prompt = buildThreadContext(mm, msg, dalName)
 		}
-		if handled, err := handleCredentialStatusQuery(dalName, prompt, threadID, msg.Channel, mm); err != nil {
+		if handled, err := handleCredentialStatusQuery(dalName, credentialStatusQueryInput(task, prompt), threadID, msg.Channel, mm); err != nil {
 			log.Printf("[agent] credential status reply failed: %v", err)
 		} else if handled {
 			appendHistoryBuffer(dalName, prompt, "credential status reply", "완료")
@@ -660,14 +664,24 @@ func handleCredentialStatusQuery(dalName, prompt, threadID, channel string, mm *
 	}
 	reply, err := buildCredentialStatusReply(dalName)
 	if err != nil {
-		return false, err
+		reply = fmt.Sprintf("credential-ops 상태 조회 실패: %v\n일반 작업으로 넘기지 않고 여기서 중단합니다.", err)
 	}
-	mm.Send(bridge.Message{
+	if err := mm.Send(bridge.Message{
 		Content: reply,
 		Channel: channel,
 		ReplyTo: threadID,
-	})
+	}); err != nil {
+		return false, err
+	}
 	return true, nil
+}
+
+func credentialStatusQueryInput(task, prompt string) string {
+	// Only use the latest user-visible task text here.
+	// Full thread context can contain stale credential notices and would
+	// incorrectly force unrelated follow-up requests into credential mode.
+	_ = prompt
+	return task
 }
 
 func isCredentialStatusQuery(prompt string) bool {
@@ -727,7 +741,7 @@ func buildCredentialStatusReply(dalName string) (string, error) {
 		lines = append(lines, "codex access token exp: "+codexExp)
 	}
 	lines = append(lines, "이 주제는 일반 문서 추론이 아니라 credential-ops 상태로만 안내합니다.")
-	lines = append(lines, fmt.Sprintf("%s 기준으로는 host bridge가 자동 sync를 처리합니다.", dalName))
+	lines = append(lines, fmt.Sprintf("%s 기준으로는 daemon claim 상태(open/resolved/rejected)로만 자동 sync 진행 여부를 판단합니다.", dalName))
 	return strings.Join(lines, "\n"), nil
 }
 
@@ -1278,6 +1292,10 @@ func shouldIgnoreDalBotMessage(msg bridge.Message, mm *bridge.MattermostBridge, 
 		return true
 	}
 	return false
+}
+
+func shouldIgnoreOperationalDalBotMessage(msg bridge.Message, mm *bridge.MattermostBridge) bool {
+	return isFromDalBot(msg.From, mm) && isOperationalNoticeMessage(msg.Content)
 }
 
 func isOperationalNoticeMessage(content string) bool {

@@ -145,6 +145,50 @@ func TestClient_Message(t *testing.T) {
 	}
 }
 
+func TestClient_Claims(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/claims" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"claims": []map[string]any{
+				{"id": "claim-0001", "dal": "verifier", "title": "credential 만료로 호스트 sync 필요", "status": "open"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	os.Setenv("DALCENTER_URL", srv.URL)
+	defer os.Unsetenv("DALCENTER_URL")
+
+	c, _ := NewClient()
+	claims, err := c.Claims("")
+	if err != nil {
+		t.Fatalf("Claims: %v", err)
+	}
+	if len(claims) != 1 {
+		t.Fatalf("got %d claims, want 1", len(claims))
+	}
+	if claims[0].ID != "claim-0001" {
+		t.Fatalf("claim id = %q, want claim-0001", claims[0].ID)
+	}
+}
+
+func TestClient_Claims_Error(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "broken", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	os.Setenv("DALCENTER_URL", srv.URL)
+	defer os.Unsetenv("DALCENTER_URL")
+
+	c, _ := NewClient()
+	if _, err := c.Claims(""); err == nil {
+		t.Fatal("expected error for 500 response")
+	}
+}
+
 func TestClient_Logs(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/logs/dev" {
