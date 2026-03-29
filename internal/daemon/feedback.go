@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -23,17 +22,16 @@ type Feedback struct {
 
 // DalStats holds aggregated success/failure counts for a single dal.
 type DalStats struct {
-	Dal        string  `json:"dal"`
-	Total      int     `json:"total"`
-	Success    int     `json:"success"`
-	Failure    int     `json:"failure"`
+	Dal         string  `json:"dal"`
+	Total       int     `json:"total"`
+	Success     int     `json:"success"`
+	Failure     int     `json:"failure"`
 	SuccessRate float64 `json:"success_rate"` // 0.0 ~ 1.0
 }
 
 type feedbackStore struct {
 	mu       sync.RWMutex
 	items    []Feedback
-	seq      int
 	filePath string
 }
 
@@ -58,13 +56,6 @@ func (s *feedbackStore) load() {
 		return
 	}
 	s.items = items
-	for _, f := range items {
-		var n int
-		fmt.Sscanf(f.ID, "fb-%d", &n)
-		if n > s.seq {
-			s.seq = n
-		}
-	}
 }
 
 func (s *feedbackStore) save() {
@@ -77,8 +68,6 @@ func (s *feedbackStore) save() {
 func (s *feedbackStore) Add(dal, taskID, task, result, errMsg string, gitChanges int, durationMs int64) Feedback {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.seq++
-
 	if len(task) > 500 {
 		task = task[:500]
 	}
@@ -87,7 +76,7 @@ func (s *feedbackStore) Add(dal, taskID, task, result, errMsg string, gitChanges
 	}
 
 	fb := Feedback{
-		ID:         fmt.Sprintf("fb-%04d", s.seq),
+		ID:         newPrefixedUUID("fb"),
 		Dal:        dal,
 		TaskID:     taskID,
 		Task:       task,

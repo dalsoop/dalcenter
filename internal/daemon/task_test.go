@@ -4,15 +4,18 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 )
 
+var prefixedUUIDPattern = regexp.MustCompile(`^(task|fb)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
 func TestTaskStore_New(t *testing.T) {
 	s := newTaskStore()
 	tr := s.New("dev", "go test ./...")
-	if tr.ID != "task-0001" {
-		t.Errorf("expected task-0001, got %s", tr.ID)
+	if !prefixedUUIDPattern.MatchString(tr.ID) {
+		t.Fatalf("expected task UUID-style id, got %s", tr.ID)
 	}
 	if tr.Dal != "dev" {
 		t.Errorf("expected dal=dev, got %s", tr.Dal)
@@ -25,6 +28,15 @@ func TestTaskStore_New(t *testing.T) {
 	}
 	if tr.Events[0].Kind != "accepted" {
 		t.Fatalf("expected initial accepted event, got %q", tr.Events[0].Kind)
+	}
+}
+
+func TestTaskStore_NewGeneratesUniqueIDs(t *testing.T) {
+	s := newTaskStore()
+	first := s.New("dev", "task1")
+	second := s.New("dev", "task2")
+	if first.ID == second.ID {
+		t.Fatalf("expected unique task IDs, got %q", first.ID)
 	}
 }
 

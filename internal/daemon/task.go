@@ -47,7 +47,6 @@ type TaskMetadataUpdate struct {
 type taskStore struct {
 	mu    sync.RWMutex
 	tasks map[string]*taskResult
-	seq   int
 }
 
 func newTaskStore() *taskStore {
@@ -57,9 +56,8 @@ func newTaskStore() *taskStore {
 func (s *taskStore) New(dal, task string) *taskResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.seq++
 	t := &taskResult{
-		ID:        fmt.Sprintf("task-%04d", s.seq),
+		ID:        newPrefixedUUID("task"),
 		Dal:       dal,
 		Task:      task,
 		Status:    "running",
