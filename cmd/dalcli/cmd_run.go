@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -187,6 +188,10 @@ func runAgentLoop(dalName string) error {
 
 		log.Printf("[agent] msg from=%s mention=%v(m=%q alt=%q) thread=%v dm=%v content=%s",
 			msg.From[:8], isDirectMention, mention, altMention, isThreadReply, isDM, truncate(msg.Content, 60))
+		if shouldIgnoreOperationalDalBotMessage(msg, mm) {
+			log.Printf("[agent] skipped operational dal-bot message: %s", truncate(msg.Content, 60))
+			continue
+		}
 
 		if !isDirectMention && !isThreadReply && !isDM {
 			continue
@@ -236,6 +241,12 @@ func runAgentLoop(dalName string) error {
 		prompt := task
 		if isThreadReply && !isDirectMention {
 			prompt = buildThreadContext(mm, msg, dalName)
+		}
+		if handled, err := handleCredentialStatusQuery(dalName, credentialStatusQueryInput(task, prompt), threadID, msg.Channel, mm); err != nil {
+			log.Printf("[agent] credential status reply failed: %v", err)
+		} else if handled {
+			appendHistoryBuffer(dalName, prompt, "credential status reply", "완료")
+			continue
 		}
 
 		output, err := executeTask(prompt)
@@ -349,13 +360,13 @@ func isDalOnlyChanges(porcelainOutput string) bool {
 // isOnlyArtifacts returns true if all changes are runtime artifacts (not real code changes).
 func isOnlyArtifacts(porcelainOutput string) bool {
 	artifacts := []string{
-		"wisdom.md",           // root-level copy (not .dal/wisdom.md)
-		"decisions.md",        // root-level copy
-		".dal/data/",          // runtime data
-		"now.md",              // state mount leak
-		"decisions/inbox/",    // state mount leak
-		"history-buffer/",     // state mount leak
-		"wisdom-inbox/",       // state mount leak
+		"wisdom.md",        // root-level copy (not .dal/wisdom.md)
+		"decisions.md",     // root-level copy
+		".dal/data/",       // runtime data
+		"now.md",           // state mount leak
+		"decisions/inbox/", // state mount leak
+		"history-buffer/",  // state mount leak
+		"wisdom-inbox/",    // state mount leak
 	}
 	lines := strings.Split(porcelainOutput, "\n")
 	for _, line := range lines {
@@ -610,6 +621,135 @@ func reportCentralTrip(dalName, reason string) {
 	}
 	resp.Body.Close()
 	log.Printf("[central-circuit] reported trip to daemon (by %s)", dalName)
+}
+
+func handleCredentialStatusQuery(dalName, prompt, threadID, channel string, mm *bridge.MattermostBridge) (bool, error) {
+	if !isCredentialStatusQuery(prompt) {
+		return false, nil
+	}
+	reply, err := buildCredentialStatusReply(dalName)
+	if err != nil {
+		reply = fmt.Sprintf("credential-ops 상태 조회 실패: %v\n일반 작업으로 넘기지 않고 여기서 중단합니다.", err)
+	}
+	if err := mm.Send(bridge.Message{
+		Content: reply,
+		Channel: channel,
+		ReplyTo: threadID,
+	}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func credentialStatusQueryInput(task, prompt string) string {
+	// Full thread context can contain stale credential notices.
+	// Route the status check only from the latest user-visible task text.
+	_ = prompt
+	return task
+}
+
+func isCredentialStatusQuery(prompt string) bool {
+	lower := strings.ToLower(prompt)
+	keywords := []string{
+		"credential", "크리덴셜", "sync-dal-creds", "pve-sync-creds",
+		"auth login", "expiresat", "expires_at", "token exp", "token 만료",
+		"credential 만료", "토큰 만료", "호스트 전용", "인증 갱신",
+	}
+	for _, keyword := range keywords {
+		if strings.Contains(lower, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func buildCredentialStatusReply(dalName string) (string, error) {
+	client, err := dalcenterClientOrFallback()
+	if err != nil {
+		return "", err
+	}
+	claims, err := client.Claims("")
+	if err != nil {
+		return "", err
+	}
+
+	var openCredentialClaims int
+	var latestResolved *daemon.Claim
+	for i := range claims {
+		claim := claims[i]
+		if !isCredentialClaimRecord(claim) {
+			continue
+		}
+		if claim.Status == "open" || claim.Status == "acknowledged" {
+			openCredentialClaims++
+		}
+		if claim.Status == "resolved" {
+			if latestResolved == nil || claim.Timestamp.After(latestResolved.Timestamp) {
+				copied := claim
+				latestResolved = &copied
+			}
+		}
+	}
+
+	lines := []string{
+		"자동 credential 상태만 기준으로 답합니다.",
+		fmt.Sprintf("현재 daemon 기준 open credential claim: %d", openCredentialClaims),
+	}
+	if latestResolved != nil {
+		lines = append(lines, fmt.Sprintf("최근 credential sync: %s %s", latestResolved.ID, latestResolved.Response))
+	}
+	if claudeExp := readCredentialExpiry(filepath.Join(userHomeDir(), ".claude", ".credentials.json")); claudeExp != "" {
+		lines = append(lines, "claude expiresAt: "+claudeExp)
+	}
+	if codexExp := readCredentialExpiry(filepath.Join(userHomeDir(), ".codex", "auth.json")); codexExp != "" {
+		lines = append(lines, "codex access token exp: "+codexExp)
+	}
+	lines = append(lines, "이 주제는 일반 문서 추론이 아니라 credential-ops 상태로만 안내합니다.")
+	lines = append(lines, fmt.Sprintf("%s 기준으로는 daemon claim 상태(open/resolved/rejected)로만 자동 sync 진행 여부를 판단합니다.", dalName))
+	return strings.Join(lines, "\n"), nil
+}
+
+func isCredentialClaimRecord(claim daemon.Claim) bool {
+	if strings.Contains(claim.Context, "kind=credential_sync") {
+		return true
+	}
+	if strings.Contains(claim.Title, "credential 만료") {
+		return true
+	}
+	return strings.Contains(claim.Detail, "credential/auth failed") || strings.Contains(claim.Detail, "auth failed")
+}
+
+func readCredentialExpiry(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	if strings.Contains(string(data), "claudeAiOauth") {
+		var claude struct {
+			ClaudeAiOauth struct {
+				ExpiresAt int64 `json:"expiresAt"`
+			} `json:"claudeAiOauth"`
+		}
+		if json.Unmarshal(data, &claude) == nil && claude.ClaudeAiOauth.ExpiresAt > 0 {
+			return time.UnixMilli(claude.ClaudeAiOauth.ExpiresAt).UTC().Format(time.RFC3339)
+		}
+	}
+	if strings.Contains(string(data), "expires_at") {
+		var codex struct {
+			Tokens struct {
+				ExpiresAt string `json:"expires_at"`
+			} `json:"tokens"`
+		}
+		if json.Unmarshal(data, &codex) == nil && codex.Tokens.ExpiresAt != "" {
+			return codex.Tokens.ExpiresAt
+		}
+	}
+	return ""
+}
+
+func userHomeDir() string {
+	home, _ := os.UserHomeDir()
+	return home
 }
 
 func fetchAgentConfig(dalName string) (*agentConfig, error) {
@@ -986,6 +1126,23 @@ func escalateAutoTaskFailure(consecutiveFails int, dalName, autoTask, errMsg str
 func isFromLeader(senderID string, mm *bridge.MattermostBridge) bool {
 	username := mm.GetUsername(senderID)
 	return strings.Contains(username, "leader")
+}
+
+func isFromDalBot(senderID string, mm *bridge.MattermostBridge) bool {
+	username := mm.GetUsername(senderID)
+	return strings.HasPrefix(username, "dal-")
+}
+
+func shouldIgnoreOperationalDalBotMessage(msg bridge.Message, mm *bridge.MattermostBridge) bool {
+	return isFromDalBot(msg.From, mm) && isOperationalNoticeMessage(msg.Content)
+}
+
+func isOperationalNoticeMessage(content string) bool {
+	lower := strings.ToLower(content)
+	return (strings.Contains(content, "⚠️ credential 만료") ||
+		strings.Contains(lower, "credential/auth failed")) &&
+		(strings.Contains(content, "sync-dal-creds.sh") ||
+			strings.Contains(content, "pve-sync-creds"))
 }
 
 // reportToLeader sends a summary to the leader bot in the same channel
