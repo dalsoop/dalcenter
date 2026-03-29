@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +39,8 @@ var credentialRefreshCooldown = struct {
 	last: make(map[string]time.Time),
 	ttl:  10 * time.Minute,
 }
+
+var workspaceDir = "/workspace"
 
 func shouldNotifyCredentialRefresh(dalName string) bool {
 	if dalName == "" {
@@ -111,6 +115,18 @@ type taskVerificationSnapshot struct {
 	Completion *daemon.CompletionResult
 }
 
+type workspaceGitState struct {
+	Status       string
+	StatusByPath map[string]gitStatusEntry
+	Fingerprints map[string]string
+}
+
+type gitStatusEntry struct {
+	Raw  string
+	Code string
+	Path string
+}
+
 func updateTrackedRunMetadata(taskID string, snapshot *taskVerificationSnapshot) {
 	if taskID == "" || snapshot == nil {
 		return
@@ -131,7 +147,7 @@ func updateTrackedRunMetadata(taskID string, snapshot *taskVerificationSnapshot)
 	}
 }
 
-func collectTaskVerification() *taskVerificationSnapshot {
+func collectTaskVerification(before *workspaceGitState) *taskVerificationSnapshot {
 	snapshot := &taskVerificationSnapshot{
 		Verified: "skipped",
 		Completion: &daemon.CompletionResult{
@@ -140,21 +156,14 @@ func collectTaskVerification() *taskVerificationSnapshot {
 		},
 	}
 
-	diffOut, statusOut, err := workspaceGitSnapshot()
+	after, err := captureWorkspaceGitState()
 	if err != nil {
 		snapshot.Completion.SkipReason = "git status failed"
 		return snapshot
 	}
 
-	var diffParts []string
-	if strings.TrimSpace(diffOut) != "" {
-		diffParts = append(diffParts, strings.TrimSpace(diffOut))
-	}
-	if strings.TrimSpace(statusOut) != "" {
-		diffParts = append(diffParts, strings.TrimSpace(statusOut))
-	}
-	snapshot.GitDiff = truncate(strings.Join(diffParts, "\n"), 4000)
-	snapshot.GitChanges = countGitStatusLines(statusOut)
+	changedEntries := changedGitStatusEntries(before, after)
+	snapshot.GitChanges = len(changedEntries)
 	if snapshot.GitChanges == 0 {
 		snapshot.Verified = "no_changes"
 		snapshot.Completion.SkipReason = "no code changes detected"
@@ -162,17 +171,18 @@ func collectTaskVerification() *taskVerificationSnapshot {
 	}
 
 	snapshot.Verified = "yes"
+	snapshot.GitDiff = buildVerificationDiff(changedEntries)
 	snapshot.Completion = collectWorkspaceCompletion()
 	return snapshot
 }
 
 func workspaceGitSnapshot() (string, string, error) {
 	diffCmd := exec.Command("git", "diff", "--stat", "HEAD")
-	diffCmd.Dir = "/workspace"
+	diffCmd.Dir = workspaceDir
 	diffOut, diffErr := diffCmd.Output()
 
 	statusCmd := exec.Command("git", "status", "--porcelain")
-	statusCmd.Dir = "/workspace"
+	statusCmd.Dir = workspaceDir
 	statusOut, statusErr := statusCmd.Output()
 
 	if diffErr != nil || statusErr != nil {
@@ -181,24 +191,179 @@ func workspaceGitSnapshot() (string, string, error) {
 		}
 		return "", "", statusErr
 	}
-	return strings.TrimSpace(string(diffOut)), strings.TrimSpace(string(statusOut)), nil
+	return strings.TrimSpace(string(diffOut)), strings.TrimRight(string(statusOut), "\n"), nil
 }
 
-func countGitStatusLines(status string) int {
-	if strings.TrimSpace(status) == "" {
-		return 0
+func captureWorkspaceGitState() (*workspaceGitState, error) {
+	_, statusOut, err := workspaceGitSnapshot()
+	if err != nil {
+		return nil, err
 	}
-	count := 0
+	state := &workspaceGitState{
+		Status:       statusOut,
+		StatusByPath: parseGitStatusEntries(statusOut),
+		Fingerprints: map[string]string{},
+	}
+	for path := range state.StatusByPath {
+		state.Fingerprints[path] = workspacePathFingerprint(path)
+	}
+	return state, nil
+}
+
+func parseGitStatusEntries(status string) map[string]gitStatusEntry {
+	entries := make(map[string]gitStatusEntry)
 	for _, line := range strings.Split(status, "\n") {
-		if strings.TrimSpace(line) != "" {
-			count++
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		entry := gitStatusEntry{Raw: line}
+		if len(line) >= 2 {
+			entry.Code = line[:2]
+		}
+		if len(line) > 3 {
+			entry.Path = strings.TrimSpace(line[3:])
+		}
+		if idx := strings.Index(entry.Path, " -> "); idx >= 0 {
+			entry.Path = strings.TrimSpace(entry.Path[idx+4:])
+		}
+		if entry.Path == "" {
+			continue
+		}
+		entries[entry.Path] = entry
+	}
+	return entries
+}
+
+func workspacePathFingerprint(path string) string {
+	fullPath := filepath.Join(workspaceDir, path)
+	info, err := os.Lstat(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "missing"
+		}
+		return "error:" + err.Error()
+	}
+	if info.IsDir() {
+		return "dir"
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(fullPath)
+		if err != nil {
+			return "symlink:error:" + err.Error()
+		}
+		sum := sha256.Sum256([]byte(target))
+		return fmt.Sprintf("symlink:%x", sum)
+	}
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		return "error:" + err.Error()
+	}
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%s:%x", info.Mode().String(), sum)
+}
+
+func changedGitStatusEntries(before, after *workspaceGitState) []gitStatusEntry {
+	if after == nil {
+		return nil
+	}
+	pathSet := make(map[string]struct{})
+	if before != nil {
+		for path := range before.StatusByPath {
+			pathSet[path] = struct{}{}
 		}
 	}
-	return count
+	for path := range after.StatusByPath {
+		pathSet[path] = struct{}{}
+	}
+
+	paths := make([]string, 0, len(pathSet))
+	for path := range pathSet {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	changed := make([]gitStatusEntry, 0, len(paths))
+	for _, path := range paths {
+		var beforeEntry gitStatusEntry
+		var beforeOK bool
+		if before != nil {
+			beforeEntry, beforeOK = before.StatusByPath[path]
+		}
+		afterEntry, afterOK := after.StatusByPath[path]
+		beforeFP := ""
+		if before != nil {
+			beforeFP = before.Fingerprints[path]
+		}
+		afterFP := after.Fingerprints[path]
+		if beforeOK == afterOK && beforeEntry.Raw == afterEntry.Raw && beforeFP == afterFP {
+			continue
+		}
+		if afterOK {
+			changed = append(changed, afterEntry)
+			continue
+		}
+		changed = append(changed, gitStatusEntry{
+			Raw:  "clean " + path,
+			Code: "  ",
+			Path: path,
+		})
+	}
+	return changed
+}
+
+func buildVerificationDiff(entries []gitStatusEntry) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	paths := make([]string, 0, len(entries))
+	statusLines := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Path != "" {
+			paths = append(paths, entry.Path)
+		}
+		if strings.TrimSpace(entry.Raw) != "" {
+			statusLines = append(statusLines, entry.Raw)
+		}
+	}
+
+	diffParts := make([]string, 0, 3)
+	if diffStat := workspaceGitDiffForPaths(paths); diffStat != "" {
+		diffParts = append(diffParts, diffStat)
+	}
+	if len(statusLines) > 0 {
+		diffParts = append(diffParts, strings.Join(statusLines, "\n"))
+	}
+	return truncate(strings.Join(diffParts, "\n"), 4000)
+}
+
+func workspaceGitDiffForPaths(paths []string) string {
+	if len(paths) == 0 {
+		return ""
+	}
+	args := append([]string{"diff", "--stat", "HEAD", "--"}, paths...)
+	diffOut, _ := runWorkspaceGitCommand(args...)
+	args = append([]string{"diff", "--stat", "--cached", "HEAD", "--"}, paths...)
+	cachedOut, _ := runWorkspaceGitCommand(args...)
+
+	parts := make([]string, 0, 2)
+	if diffOut != "" {
+		parts = append(parts, diffOut)
+	}
+	if cachedOut != "" && cachedOut != diffOut {
+		parts = append(parts, cachedOut)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func runWorkspaceGitCommand(args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = workspaceDir
+	out, err := cmd.Output()
+	return strings.TrimSpace(string(out)), err
 }
 
 func collectWorkspaceCompletion() *daemon.CompletionResult {
-	if _, err := os.Stat("/workspace/go.mod"); err != nil {
+	if _, err := os.Stat(filepath.Join(workspaceDir, "go.mod")); err != nil {
 		return &daemon.CompletionResult{
 			Skipped:    true,
 			SkipReason: "go.mod not found",
@@ -234,7 +399,7 @@ func collectWorkspaceCompletion() *daemon.CompletionResult {
 
 func runWorkspaceCommand(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
-	cmd.Dir = "/workspace"
+	cmd.Dir = workspaceDir
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
@@ -515,6 +680,11 @@ func runAgentLoop(dalName string) error {
 			ReplyTo: spec.ThreadID,
 		})
 
+		beforeVerification, beforeErr := captureWorkspaceGitState()
+		if beforeErr != nil {
+			log.Printf("[agent] verification baseline skipped: %v", beforeErr)
+		}
+
 		result := runTaskSpec(spec)
 		output, err := result.Output, result.Err
 		if err != nil {
@@ -562,7 +732,7 @@ func runAgentLoop(dalName string) error {
 
 		log.Printf("[agent] done (%d bytes)", len(output))
 
-		verification := collectTaskVerification()
+		verification := collectTaskVerification(beforeVerification)
 		updateTrackedRunMetadata(taskRunID, verification)
 		appendTrackedRunEvent(taskRunID, "verification", verificationSummaryLine(verification))
 
