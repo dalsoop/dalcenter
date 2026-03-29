@@ -691,20 +691,24 @@ func (d *Daemon) handleMessage(w http.ResponseWriter, r *http.Request) {
 	// the dal's bridge will skip the message as "self".
 	token := d.mm.AdminToken
 
-	// Auto-prefix leader mention so the leader's dalcli picks up the message
-	// dalcli uses: mention=@dal-{name}-{uuidShort} or altMention=@{name}
 	msg := req.Message
 	d.mu.RLock()
-	for _, c := range d.containers {
-		if c.Role == "leader" {
-			// Construct exact mention: @dal-{name}-{uuidShort}
-			short := uuidShort(c.UUID)
-			mention := fmt.Sprintf("@dal-%s-%s", c.DalName, short)
-			altMention := "@" + c.DalName
-			if !strings.Contains(msg, mention) && !strings.Contains(msg, altMention) {
-				msg = mention + " " + msg
+	_, fromRunningDal := d.containers[req.From]
+	if !fromRunningDal {
+		// Auto-prefix leader mention only for external/user-originated messages.
+		// Internal dal notices (claims, reports, status) should reach humans without
+		// being re-consumed by the leader as a new task.
+		for _, c := range d.containers {
+			if c.Role == "leader" {
+				// Construct exact mention: @dal-{name}-{uuidShort}
+				short := uuidShort(c.UUID)
+				mention := fmt.Sprintf("@dal-%s-%s", c.DalName, short)
+				altMention := "@" + c.DalName
+				if !strings.Contains(msg, mention) && !strings.Contains(msg, altMention) {
+					msg = mention + " " + msg
+				}
+				break
 			}
-			break
 		}
 	}
 	d.mu.RUnlock()

@@ -136,6 +136,89 @@ func TestHandleMessage_ThreadID(t *testing.T) {
 	}
 }
 
+func TestHandleMessage_ExternalMessageGetsLeaderMention(t *testing.T) {
+	var receivedBody string
+	mmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v4/posts" {
+			bodyBytes, _ := io.ReadAll(r.Body)
+			receivedBody = string(bodyBytes)
+			json.NewEncoder(w).Encode(map[string]string{"id": "post-external"})
+			return
+		}
+		w.WriteHeader(200)
+		w.Write([]byte("{}"))
+	}))
+	defer mmServer.Close()
+
+	d := &Daemon{
+		mm: &MattermostConfig{
+			URL:        mmServer.URL,
+			AdminToken: "admin-token",
+		},
+		channelID: "ch-123",
+		containers: map[string]*Container{
+			"leader": {DalName: "leader", UUID: "emotion-ai-leader-20260329", Role: "leader", Status: "running"},
+			"dev":    {DalName: "dev", UUID: "emotion-ai-dev-20260329", Role: "member", Status: "running"},
+		},
+	}
+
+	body := `{"from":"devops","message":"@verifier 작업 지시: pong만 답해"}`
+	req := httptest.NewRequest("POST", "/api/message", strings.NewReader(body))
+	w := httptest.NewRecorder()
+
+	d.handleMessage(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(receivedBody, "@dal-leader-emotio") {
+		t.Fatalf("expected leader mention to be injected, body=%s", receivedBody)
+	}
+}
+
+func TestHandleMessage_RunningDalNoticeSkipsLeaderMention(t *testing.T) {
+	var receivedBody string
+	mmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v4/posts" {
+			bodyBytes, _ := io.ReadAll(r.Body)
+			receivedBody = string(bodyBytes)
+			json.NewEncoder(w).Encode(map[string]string{"id": "post-internal"})
+			return
+		}
+		w.WriteHeader(200)
+		w.Write([]byte("{}"))
+	}))
+	defer mmServer.Close()
+
+	d := &Daemon{
+		mm: &MattermostConfig{
+			URL:        mmServer.URL,
+			AdminToken: "admin-token",
+		},
+		channelID: "ch-123",
+		containers: map[string]*Container{
+			"leader":   {DalName: "leader", UUID: "emotion-ai-leader-20260329", Role: "leader", Status: "running"},
+			"verifier": {DalName: "verifier", UUID: "emotion-ai-verifier-20260329", Role: "member", Status: "running"},
+		},
+	}
+
+	body := `{"from":"verifier","message":"[verifier] ⚠️ credential 만료. 호스트에서 sync-dal-creds.sh 실행 필요. claim=claim-0001"}`
+	req := httptest.NewRequest("POST", "/api/message", strings.NewReader(body))
+	w := httptest.NewRecorder()
+
+	d.handleMessage(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(receivedBody, "@dal-leader-emotio") || strings.Contains(receivedBody, "@leader") {
+		t.Fatalf("expected no leader mention for running-dal notice, body=%s", receivedBody)
+	}
+	if !strings.Contains(receivedBody, "claim-0001") {
+		t.Fatalf("expected original notice body to be preserved, body=%s", receivedBody)
+	}
+}
+
 func TestHandleMessage_ReturnsPostID(t *testing.T) {
 	mmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v4/posts" {
