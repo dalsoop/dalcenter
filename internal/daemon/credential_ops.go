@@ -254,6 +254,11 @@ func (d *Daemon) runCredentialSync(req credentialSyncRequest) {
 	if req.ClaimID != "" {
 		d.claims.Respond(req.ClaimID, "resolved", successMsg)
 	}
+	supersededMsg := fmt.Sprintf("%s (superseded older credential claims)", successMsg)
+	resolved := d.claims.ResolveStaleCredentialClaims(player, req.ClaimID, supersededMsg)
+	if resolved > 0 {
+		log.Printf("[credential-ops] resolved %d stale credential claims for player=%s", resolved, player)
+	}
 }
 
 func (d *Daemon) finishCredentialSyncFailure(req credentialSyncRequest, player, vmid, step string, err error, output string) {

@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"syscall"
 	"time"
 )
 
@@ -22,6 +25,10 @@ func startSoftServe(ctx context.Context) (*exec.Cmd, error) {
 	if err := os.MkdirAll(dataPath, 0755); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
+	if softServeAlreadyRunning() {
+		log.Printf("[soft-serve] existing instance detected, skipping child start")
+		return nil, nil
+	}
 
 	cmd := exec.CommandContext(ctx, softBin, "serve")
 	cmd.Env = append(os.Environ(), "SOFT_SERVE_DATA_PATH="+dataPath)
@@ -35,6 +42,7 @@ func startSoftServe(ctx context.Context) (*exec.Cmd, error) {
 	// Wait briefly for soft-serve to be ready
 	time.Sleep(2 * time.Second)
 	log.Printf("[soft-serve] data=%s", dataPath)
+	_ = os.WriteFile(softServePIDFile(), []byte(strconv.Itoa(cmd.Process.Pid)), 0644)
 
 	return cmd, nil
 }
@@ -47,6 +55,13 @@ func softServeSSHPort() string {
 	return "23231"
 }
 
+func softServeGitPort() string {
+	if p := os.Getenv("SOFT_SERVE_GIT_PORT"); p != "" {
+		return p
+	}
+	return "9418"
+}
+
 // softServeDataPath returns the data directory for soft-serve.
 func softServeDataPath() string {
 	if p := os.Getenv("SOFT_SERVE_DATA_PATH"); p != "" {
@@ -54,6 +69,42 @@ func softServeDataPath() string {
 	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".dalcenter", "soft-serve")
+}
+
+func softServePIDFile() string {
+	return filepath.Join(softServeDataPath(), "soft-serve.pid")
+}
+
+func softServeAlreadyRunning() bool {
+	if pid, ok := softServePID(); ok && processAlive(pid) {
+		return true
+	}
+	return softServePortOpen("127.0.0.1:"+softServeSSHPort()) || softServePortOpen("127.0.0.1:"+softServeGitPort())
+}
+
+func softServePID() (int, bool) {
+	data, err := os.ReadFile(softServePIDFile())
+	if err != nil {
+		return 0, false
+	}
+	pid, err := strconv.Atoi(string(data))
+	if err != nil || pid <= 0 {
+		return 0, false
+	}
+	return pid, true
+}
+
+func processAlive(pid int) bool {
+	return syscall.Kill(pid, 0) == nil
+}
+
+func softServePortOpen(addr string) bool {
+	conn, err := net.DialTimeout("tcp", addr, 300*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 // EnsureSoftServeRepo creates a repository in soft-serve if it doesn't exist.

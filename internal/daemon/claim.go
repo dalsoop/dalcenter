@@ -3,7 +3,9 @@ package daemon
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -147,6 +149,65 @@ func (s *claimStore) Get(id string) *Claim {
 		}
 	}
 	return nil
+}
+
+func claimPlayer(c Claim) string {
+	if vals, err := url.ParseQuery(c.Context); err == nil {
+		if player := strings.TrimSpace(vals.Get("player")); player != "" {
+			return player
+		}
+	}
+	for _, player := range []string{"claude", "codex", "gemini"} {
+		if strings.Contains(c.Detail, player) || strings.Contains(c.Context, "player="+player) {
+			return player
+		}
+	}
+	return ""
+}
+
+func isCredentialClaim(c Claim) bool {
+	if strings.Contains(c.Context, "kind=credential_sync") {
+		return true
+	}
+	if strings.Contains(c.Title, "credential 만료") {
+		return true
+	}
+	return strings.Contains(c.Detail, "credential/auth failed") || strings.Contains(c.Detail, "auth failed")
+}
+
+func (s *claimStore) ResolveStaleCredentialClaims(player, keepID, response string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if strings.TrimSpace(player) == "" {
+		return 0
+	}
+	if response == "" {
+		response = "credential sync completed"
+	}
+
+	resolved := 0
+	now := time.Now().UTC()
+	for i := range s.items {
+		c := &s.items[i]
+		if c.ID == keepID {
+			continue
+		}
+		if c.Status != "open" && c.Status != "acknowledged" {
+			continue
+		}
+		if !isCredentialClaim(*c) || claimPlayer(*c) != player {
+			continue
+		}
+		c.Status = "resolved"
+		c.Response = response
+		c.RespondAt = &now
+		resolved++
+	}
+	if resolved > 0 {
+		s.save()
+	}
+	return resolved
 }
 
 // --- HTTP handlers ---

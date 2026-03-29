@@ -123,3 +123,27 @@ func TestClaimStore_Eviction(t *testing.T) {
 		t.Errorf("expected max %d, got %d", maxClaims, len(all))
 	}
 }
+
+func TestClaimStore_ResolveStaleCredentialClaims(t *testing.T) {
+	s := newClaimStore()
+	oldOpen := s.Add("verifier", ClaimBlocked, "credential 만료로 호스트 sync 필요", "claude credential/auth failed; host에서 sync-dal-creds.sh 실행 필요", "player=claude")
+	oldAck := s.Add("dev", ClaimBlocked, "credential 만료로 호스트 sync 필요", "claude auth failed", "kind=credential_sync&player=claude&source=dalcli")
+	if !s.Respond(oldAck.ID, "acknowledged", "queued") {
+		t.Fatal("expected acknowledged update")
+	}
+	current := s.Add("verifier", ClaimBlocked, "credential 만료로 호스트 sync 필요", "claude auth failed", "kind=credential_sync&player=claude&source=manual")
+
+	resolved := s.ResolveStaleCredentialClaims("claude", current.ID, "credential sync completed")
+	if resolved != 2 {
+		t.Fatalf("resolved = %d, want 2", resolved)
+	}
+	if got := s.Get(oldOpen.ID); got == nil || got.Status != "resolved" {
+		t.Fatalf("old open claim not resolved: %#v", got)
+	}
+	if got := s.Get(oldAck.ID); got == nil || got.Status != "resolved" {
+		t.Fatalf("old acknowledged claim not resolved: %#v", got)
+	}
+	if got := s.Get(current.ID); got == nil || got.Status != "open" {
+		t.Fatalf("current claim should remain open: %#v", got)
+	}
+}
