@@ -261,6 +261,13 @@ func TestDockerRun_InjectsMattermostURL(t *testing.T) {
 	}
 }
 
+func TestDockerRun_InjectsExternalURL(t *testing.T) {
+	src := readSource(t, "docker.go")
+	if !strings.Contains(src, "DALCENTER_EXTERNAL_URL") {
+		t.Fatal("dockerRun must inject DALCENTER_EXTERNAL_URL into container when configured")
+	}
+}
+
 // ── restart 핸들러 ───────────────────────────────────────
 
 func TestRestartHandler_Exists(t *testing.T) {

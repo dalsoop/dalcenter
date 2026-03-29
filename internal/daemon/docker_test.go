@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -178,6 +179,49 @@ func TestShouldDisableContainerDM(t *testing.T) {
 	}
 	if shouldDisableContainerDM(&localdal.DalProfile{ChannelOnly: false}) != false {
 		t.Fatal("default dal should keep DM enabled")
+	}
+}
+
+func TestCredentialPlayers(t *testing.T) {
+	dal := &localdal.DalProfile{Player: "claude", FallbackPlayer: "codex"}
+	got := credentialPlayers(dal)
+	if len(got) != 2 || got[0] != "claude" || got[1] != "codex" {
+		t.Fatalf("credentialPlayers() = %v, want [claude codex]", got)
+	}
+
+	same := credentialPlayers(&localdal.DalProfile{Player: "codex", FallbackPlayer: "codex"})
+	if len(same) != 1 || same[0] != "codex" {
+		t.Fatalf("credentialPlayers() should dedupe fallback, got %v", same)
+	}
+}
+
+func TestAppendCredentialMounts(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	claudeFuture := time.Now().Add(time.Hour).UnixMilli()
+	codexFuture := time.Now().Add(time.Hour).Format(time.RFC3339)
+	if err := os.WriteFile(filepath.Join(home, ".claude", ".credentials.json"), []byte(fmt.Sprintf(`{"claudeAiOauth":{"expiresAt":%d}}`, claudeFuture)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".codex", "auth.json"), []byte(fmt.Sprintf(`{"tokens":{"expires_at":"%s"}}`, codexFuture)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var warnings []string
+	args := appendCredentialMounts(nil, home, []string{"claude", "codex"}, &warnings)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, ".claude/.credentials.json") {
+		t.Fatalf("expected claude credential mount, got %q", joined)
+	}
+	if !strings.Contains(joined, ".codex/auth.json") {
+		t.Fatalf("expected codex credential mount, got %q", joined)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("expected no warnings, got %v", warnings)
 	}
 }
 

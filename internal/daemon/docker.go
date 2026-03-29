@@ -101,6 +101,61 @@ func shouldDisableContainerDM(dal *localdal.DalProfile) bool {
 	return dal != nil && dal.ChannelOnly
 }
 
+func credentialPlayers(dal *localdal.DalProfile) []string {
+	if dal == nil {
+		return nil
+	}
+	var players []string
+	seen := make(map[string]bool)
+	add := func(player string) {
+		player = strings.TrimSpace(player)
+		if player == "" || seen[player] {
+			return
+		}
+		seen[player] = true
+		players = append(players, player)
+	}
+	add(dal.Player)
+	add(dal.FallbackPlayer)
+	return players
+}
+
+func appendCredentialMounts(args []string, hostHome string, players []string, warnings *[]string) []string {
+	for _, player := range players {
+		switch player {
+		case "claude":
+			credPath := filepath.Join(hostHome, ".claude", ".credentials.json")
+			if _, err := os.Stat(credPath); err == nil {
+				args = append(args, "-v", fmt.Sprintf("%s:%s/.credentials.json:ro", credPath, playerHome("claude")))
+				if expired, _ := isCredentialExpired(credPath); expired {
+					w := "Claude credential expired — run: pve-sync-creds"
+					log.Printf("WARNING: %s", w)
+					*warnings = append(*warnings, w)
+				}
+			} else {
+				w := fmt.Sprintf("Claude credential not found at %s", credPath)
+				log.Printf("WARNING: %s", w)
+				*warnings = append(*warnings, w)
+			}
+		case "codex":
+			credPath := filepath.Join(hostHome, ".codex", "auth.json")
+			if _, err := os.Stat(credPath); err == nil {
+				args = append(args, "-v", fmt.Sprintf("%s:%s/auth.json:ro", credPath, playerHome("codex")))
+				if expired, _ := isCredentialExpired(credPath); expired {
+					w := "Codex credential expired — run: pve-sync-creds"
+					log.Printf("WARNING: %s", w)
+					*warnings = append(*warnings, w)
+				}
+			} else {
+				w := fmt.Sprintf("Codex credential not found at %s", credPath)
+				log.Printf("WARNING: %s", w)
+				*warnings = append(*warnings, w)
+			}
+		}
+	}
+	return args
+}
+
 // dockerRun creates and starts a Docker container for a dal.
 // It returns the container ID, any credential warnings, and an error.
 func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *localdal.DalProfile) (string, []string, error) {
@@ -151,6 +206,9 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *
 		// Working directory
 		"-w", containerWorkDir,
 	)
+	if externalURL := strings.TrimSpace(os.Getenv("DALCENTER_EXTERNAL_URL")); externalURL != "" {
+		args = append(args, "-e", fmt.Sprintf("DALCENTER_EXTERNAL_URL=%s", externalURL))
+	}
 
 	// Mount service repo as workspace (shared mode) or leave empty for clone mode
 	isCloneMode := dal.Workspace == "clone"
@@ -160,36 +218,10 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *
 		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", localdalRoot, filepath.Join(containerWorkDir, ".dal")))
 	}
 
-	// Mount credentials (player-specific)
+	// Mount credentials for primary + fallback players.
+	args = appendCredentialMounts(args, hostHome, credentialPlayers(dal), &warnings)
+
 	switch dal.Player {
-	case "claude":
-		credPath := filepath.Join(hostHome, ".claude", ".credentials.json")
-		if _, err := os.Stat(credPath); err == nil {
-			args = append(args, "-v", fmt.Sprintf("%s:%s/.credentials.json", credPath, home))
-			if expired, _ := isCredentialExpired(credPath); expired {
-				w := "Claude credential expired — run: pve-sync-creds"
-				log.Printf("WARNING: %s", w)
-				warnings = append(warnings, w)
-			}
-		} else {
-			w := fmt.Sprintf("Claude credential not found at %s", credPath)
-			log.Printf("WARNING: %s", w)
-			warnings = append(warnings, w)
-		}
-	case "codex":
-		credPath := filepath.Join(hostHome, ".codex", "auth.json")
-		if _, err := os.Stat(credPath); err == nil {
-			args = append(args, "-v", fmt.Sprintf("%s:%s/auth.json:ro", credPath, home))
-			if expired, _ := isCredentialExpired(credPath); expired {
-				w := "Codex credential expired — run: pve-sync-creds"
-				log.Printf("WARNING: %s", w)
-				warnings = append(warnings, w)
-			}
-		} else {
-			w := fmt.Sprintf("Codex credential not found at %s", credPath)
-			log.Printf("WARNING: %s", w)
-			warnings = append(warnings, w)
-		}
 	case "gemini":
 		// Gemini uses API key — resolve from dal.cue (VK:/env:), fallback to host env
 		key := dal.GeminiAPIKey
