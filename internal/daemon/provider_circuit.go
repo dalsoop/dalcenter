@@ -30,14 +30,26 @@ var globalCircuit = &ProviderCircuit{
 	cooldown:     4 * time.Hour,
 }
 
+func (pc *ProviderCircuit) refreshLocked(now time.Time) {
+	if pc.activePlayer == pc.fallback && !pc.trippedAt.IsZero() && now.Sub(pc.trippedAt) > pc.cooldown {
+		pc.activePlayer = pc.primary
+		pc.trippedAt = time.Time{}
+		pc.trippedBy = ""
+		pc.reason = ""
+		log.Printf("[provider-circuit] cooldown elapsed → back to %s", pc.primary)
+	}
+}
+
 // Trip switches all dals to fallback provider.
-func (pc *ProviderCircuit) Trip(dalName, reason string) {
+// Returns true only when the circuit transitions to fallback.
+func (pc *ProviderCircuit) Trip(dalName, reason string) bool {
 	pc.mu.Lock()
 	defer pc.mu.Unlock()
 
+	pc.refreshLocked(time.Now())
 	if pc.activePlayer == pc.fallback {
 		// Already on fallback
-		return
+		return false
 	}
 
 	pc.activePlayer = pc.fallback
@@ -46,6 +58,7 @@ func (pc *ProviderCircuit) Trip(dalName, reason string) {
 	pc.reason = reason
 	log.Printf("[provider-circuit] TRIPPED by %s: %s → %s for %s (reason: %s)",
 		dalName, pc.primary, pc.fallback, pc.cooldown, reason)
+	return true
 }
 
 // ActiveProvider returns the currently active provider, resetting if cooldown elapsed.
@@ -53,19 +66,16 @@ func (pc *ProviderCircuit) ActiveProvider() string {
 	pc.mu.Lock()
 	defer pc.mu.Unlock()
 
-	if pc.activePlayer == pc.fallback && !pc.trippedAt.IsZero() {
-		if time.Since(pc.trippedAt) > pc.cooldown {
-			pc.activePlayer = pc.primary
-			log.Printf("[provider-circuit] cooldown elapsed → back to %s", pc.primary)
-		}
-	}
+	pc.refreshLocked(time.Now())
 	return pc.activePlayer
 }
 
 // Status returns circuit state for API response.
 func (pc *ProviderCircuit) Status() map[string]interface{} {
-	pc.mu.RLock()
-	defer pc.mu.RUnlock()
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+
+	pc.refreshLocked(time.Now())
 
 	result := map[string]interface{}{
 		"active_provider": pc.activePlayer,
@@ -107,10 +117,10 @@ func (d *Daemon) handleProviderTrip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	globalCircuit.Trip(req.DalName, req.Reason)
+	tripped := globalCircuit.Trip(req.DalName, req.Reason)
 
 	// Notify via Mattermost if available
-	if d.mm != nil && d.channelID != "" {
+	if tripped && d.mm != nil && d.channelID != "" {
 		msg := fmt.Sprintf("⚡ **Provider Circuit Tripped** by %s\n전체 dal이 **%s → %s**로 전환 (4시간)\n사유: %s",
 			req.DalName, globalCircuit.primary, globalCircuit.fallback, req.Reason)
 		body := fmt.Sprintf(`{"channel_id":%q,"message":%q}`, d.channelID, msg)

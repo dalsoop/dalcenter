@@ -349,13 +349,13 @@ func isDalOnlyChanges(porcelainOutput string) bool {
 // isOnlyArtifacts returns true if all changes are runtime artifacts (not real code changes).
 func isOnlyArtifacts(porcelainOutput string) bool {
 	artifacts := []string{
-		"wisdom.md",           // root-level copy (not .dal/wisdom.md)
-		"decisions.md",        // root-level copy
-		".dal/data/",          // runtime data
-		"now.md",              // state mount leak
-		"decisions/inbox/",    // state mount leak
-		"history-buffer/",     // state mount leak
-		"wisdom-inbox/",       // state mount leak
+		"wisdom.md",        // root-level copy (not .dal/wisdom.md)
+		"decisions.md",     // root-level copy
+		".dal/data/",       // runtime data
+		"now.md",           // state mount leak
+		"decisions/inbox/", // state mount leak
+		"history-buffer/",  // state mount leak
+		"wisdom-inbox/",    // state mount leak
 	}
 	lines := strings.Split(porcelainOutput, "\n")
 	for _, line := range lines {
@@ -649,7 +649,11 @@ func executeTask(task string) (string, error) {
 		if err == nil {
 			return out, nil
 		}
-		log.Printf("[central-circuit] %s failed: %v, falling through to local circuit", centralPlayer, err)
+		log.Printf("[central-circuit] %s failed while primary %s is disabled: %v", centralPlayer, player, err)
+		if strings.TrimSpace(out) != "" {
+			return out, fmt.Errorf("central provider %s failed while primary %s is rate-limited: %s", centralPlayer, player, truncate(strings.TrimSpace(out), 200))
+		}
+		return out, fmt.Errorf("central provider %s failed while primary %s is rate-limited: %w", centralPlayer, player, err)
 	}
 
 	// Local circuit breaker fallback
