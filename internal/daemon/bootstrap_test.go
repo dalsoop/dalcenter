@@ -124,17 +124,47 @@ func TestContainerHasBotUsername(t *testing.T) {
 
 func TestDalBotUsername_Format(t *testing.T) {
 	cases := []struct {
-		name, uuid, want string
+		repo string
+		name string
+		uuid string
 	}{
-		{"leader", "v2-leader-20260327", "dal-leader"},
-		{"dev", "dc-codex-dev-20260327", "dal-dev"},
-		{"verifier", "vk-verifier-20260326", "dal-verifier"},
+		{"/root/veilkey-v2", "leader", "v2-leader-20260327"},
+		{"/root/dalcenter", "dev", "dc-codex-dev-20260327"},
+		{"/root/veilkey-selfhosted", "verifier", "vk-verifier-20260326"},
 	}
 	for _, tc := range cases {
-		got := dalBotUsername(tc.name, tc.uuid)
-		if got != tc.want {
-			t.Errorf("dalBotUsername(%q, %q) = %q, want %q", tc.name, tc.uuid, got, tc.want)
+		got := dalBotUsername(tc.repo, tc.name, tc.uuid)
+		if !strings.HasPrefix(got, "dal-"+tc.name+"-") {
+			t.Errorf("dalBotUsername(%q, %q, %q) = %q, want prefix %q", tc.repo, tc.name, tc.uuid, got, "dal-"+tc.name+"-")
 		}
+		if len(got) > mattermostBotUsernameMaxLen {
+			t.Errorf("dalBotUsername(%q, %q, %q) too long: %q (%d)", tc.repo, tc.name, tc.uuid, got, len(got))
+		}
+	}
+}
+
+func TestDalBotUsername_DifferentRepos(t *testing.T) {
+	a := dalBotUsername("/root/dalcenter", "leader", "leader-20260326")
+	b := dalBotUsername("/root/veilkey-v2", "leader", "v2-leader-20260327")
+	if a == b {
+		t.Fatalf("expected different usernames per repo, got %q", a)
+	}
+}
+
+func TestDalBotUsername_ShortUUID(t *testing.T) {
+	result := dalBotUsername("/root/dalcenter", "dev", "abc")
+	if !strings.HasPrefix(result, "dal-dev-") {
+		t.Errorf("got %q", result)
+	}
+}
+
+func TestDalBotUsername_LongNameWithinLimit(t *testing.T) {
+	result := dalBotUsername("/root/bridge-of-gaya-script", "story-checker", "very-long-uuid-string-here")
+	if len(result) > mattermostBotUsernameMaxLen {
+		t.Fatalf("username too long: %q (%d)", result, len(result))
+	}
+	if !strings.HasPrefix(result, "dal-story") {
+		t.Fatalf("expected recognizable prefix, got %q", result)
 	}
 }
 
@@ -469,23 +499,6 @@ func TestTaskStore_ListAll(t *testing.T) {
 	all := ts.List()
 	if len(all) != 3 {
 		t.Fatalf("expected 3 tasks, got %d", len(all))
-	}
-}
-
-// ── dalBotUsername 추가 테스트 ────────────────────────────
-
-func TestDalBotUsername_ShortUUID(t *testing.T) {
-	result := dalBotUsername("dev", "abc")
-	if result != "dal-dev" {
-		t.Errorf("got %q", result)
-	}
-}
-
-func TestDalBotUsername_LongUUID(t *testing.T) {
-	result := dalBotUsername("leader", "very-long-uuid-string-here")
-	expected := "dal-leader"
-	if result != expected {
-		t.Errorf("got %q, want %q", result, expected)
 	}
 }
 

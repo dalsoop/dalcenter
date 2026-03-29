@@ -644,6 +644,7 @@ func TestIsDirectedAtDifferentDal(t *testing.T) {
 		want    bool
 	}{
 		{"plain dm", "로그 좀 봐줘", false},
+		{"self actual mention", "@dal-leader-dalcent4f2a 확인해줘", false},
 		{"self stable mention", "@dal-leader 확인해줘", false},
 		{"self legacy mention", "@dal-leader-emotio 확인해줘", false},
 		{"self short mention", "@leader 확인해줘", false},
@@ -654,7 +655,7 @@ func TestIsDirectedAtDifferentDal(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isDirectedAtDifferentDal(tt.content, "@dal-leader", "@dal-leader-emotio", "@leader")
+			got := isDirectedAtDifferentDal(tt.content, "@dal-leader-dalcent4f2a", "@dal-leader", "@dal-leader-emotio", "@leader")
 			if got != tt.want {
 				t.Fatalf("got %v, want %v", got, tt.want)
 			}
