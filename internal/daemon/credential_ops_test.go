@@ -188,3 +188,28 @@ func TestRunCredentialSyncViaHTTP(t *testing.T) {
 		t.Fatalf("unexpected body: %s", body)
 	}
 }
+
+func TestCredentialSyncHTTPBridge_FallsBackToEnvFile(t *testing.T) {
+	t.Setenv("DALCENTER_CRED_OPS_HTTP_URL", "")
+	t.Setenv("DALCENTER_CRED_OPS_HTTP_TOKEN", "")
+
+	oldRead := readCredentialOpsFile
+	readCredentialOpsFile = func(path string) ([]byte, error) {
+		if path != "/etc/dalcenter-cred-ops-httpd.env" {
+			return nil, os.ErrNotExist
+		}
+		return []byte("DALCENTER_CRED_OPS_HTTP_LISTEN=10.50.0.1:11191\nDALCENTER_CRED_OPS_HTTP_TOKEN=test-token\n"), nil
+	}
+	defer func() { readCredentialOpsFile = oldRead }()
+
+	cfg, ok := credentialSyncHTTPBridge()
+	if !ok {
+		t.Fatal("expected env-file bridge fallback to be detected")
+	}
+	if cfg.URL != "http://10.50.0.1:11191" {
+		t.Fatalf("cfg.URL = %q, want http://10.50.0.1:11191", cfg.URL)
+	}
+	if cfg.Token != "test-token" {
+		t.Fatalf("cfg.Token = %q, want test-token", cfg.Token)
+	}
+}

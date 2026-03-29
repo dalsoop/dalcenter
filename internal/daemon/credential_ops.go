@@ -19,6 +19,9 @@ import (
 const credentialSyncCooldown = 10 * time.Minute
 
 var lxcVMIDPattern = regexp.MustCompile(`/lxc/([0-9]+)(?:/|$)`)
+var credentialOpsHTTPEnvFiles = []string{
+	"/etc/dalcenter-cred-ops-httpd.env",
+}
 
 var runCredentialOpCommand = func(name string, args ...string) (string, error) {
 	out, err := exec.Command(name, args...).CombinedOutput()
@@ -82,10 +85,69 @@ func credentialSyncSSHBridge() (credentialSyncSSHConfig, bool) {
 func credentialSyncHTTPBridge() (credentialSyncHTTPConfig, bool) {
 	url := strings.TrimSpace(os.Getenv("DALCENTER_CRED_OPS_HTTP_URL"))
 	token := strings.TrimSpace(os.Getenv("DALCENTER_CRED_OPS_HTTP_TOKEN"))
+	if url != "" && token != "" {
+		return credentialSyncHTTPConfig{URL: normalizeCredentialOpsHTTPURL(url), Token: token}, true
+	}
+	for _, path := range credentialOpsHTTPEnvFiles {
+		if cfg, ok := credentialSyncHTTPBridgeFromEnvFile(path); ok {
+			return cfg, true
+		}
+	}
+	return credentialSyncHTTPConfig{}, false
+}
+
+func credentialSyncHTTPBridgeFromEnvFile(path string) (credentialSyncHTTPConfig, bool) {
+	data, err := readCredentialOpsFile(path)
+	if err != nil {
+		return credentialSyncHTTPConfig{}, false
+	}
+
+	values := parseSimpleEnvFile(string(data))
+	url := strings.TrimSpace(values["DALCENTER_CRED_OPS_HTTP_URL"])
+	if url == "" {
+		url = strings.TrimSpace(values["DALCENTER_CRED_OPS_HTTP_LISTEN"])
+	}
+	token := strings.TrimSpace(values["DALCENTER_CRED_OPS_HTTP_TOKEN"])
 	if url == "" || token == "" {
 		return credentialSyncHTTPConfig{}, false
 	}
-	return credentialSyncHTTPConfig{URL: strings.TrimRight(url, "/"), Token: token}, true
+	return credentialSyncHTTPConfig{
+		URL:   normalizeCredentialOpsHTTPURL(url),
+		Token: token,
+	}, true
+}
+
+func parseSimpleEnvFile(raw string) map[string]string {
+	values := make(map[string]string)
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		value = strings.Trim(value, `"'`)
+		if key != "" {
+			values[key] = value
+		}
+	}
+	return values
+}
+
+func normalizeCredentialOpsHTTPURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		return strings.TrimRight(raw, "/")
+	}
+	return "http://" + strings.TrimRight(raw, "/")
 }
 
 func parseCredentialSyncContext(raw string) (credentialSyncRequest, bool) {
