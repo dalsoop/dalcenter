@@ -15,6 +15,7 @@ import (
 
 	"github.com/dalsoop/dalcenter/internal/bridge"
 	"github.com/dalsoop/dalcenter/internal/daemon"
+	"github.com/dalsoop/dalcenter/internal/providerexec"
 	"github.com/spf13/cobra"
 )
 
@@ -223,14 +224,18 @@ func runAgentLoop(dalName string) error {
 		log.Printf("[agent] msg from=%s mention=%v(m=%q alt=%q) thread=%v dm=%v content=%s",
 			msg.From[:8], isDirectMention, mention, altMention, isThreadReply, isDM, truncate(msg.Content, 60))
 
-		if shouldIgnoreDalBotMessage(msg, mm, isDirectMention, isThreadReply, isDM) {
-			log.Printf("[agent] skipped dal-bot follow-up: %s", truncate(msg.Content, 60))
-			continue
-		}
+			if shouldIgnoreDalBotMessage(msg, mm, isDirectMention, isThreadReply, isDM) {
+				log.Printf("[agent] skipped dal-bot follow-up: %s", truncate(msg.Content, 60))
+				continue
+			}
+			if isDM && isOperationalNoticeMessage(msg.Content) {
+				log.Printf("[agent] skipped operational notice DM: %s", truncate(msg.Content, 60))
+				continue
+			}
 
-		if !isDirectMention && !isThreadReply && !isDM {
-			continue
-		}
+			if !isDirectMention && !isThreadReply && !isDM {
+				continue
+			}
 
 		// Track thread
 		threadID := msg.RootID
@@ -389,13 +394,13 @@ func isDalOnlyChanges(porcelainOutput string) bool {
 // isOnlyArtifacts returns true if all changes are runtime artifacts (not real code changes).
 func isOnlyArtifacts(porcelainOutput string) bool {
 	artifacts := []string{
-		"wisdom.md",           // root-level copy (not .dal/wisdom.md)
-		"decisions.md",        // root-level copy
-		".dal/data/",          // runtime data
-		"now.md",              // state mount leak
-		"decisions/inbox/",    // state mount leak
-		"history-buffer/",     // state mount leak
-		"wisdom-inbox/",       // state mount leak
+		"wisdom.md",        // root-level copy (not .dal/wisdom.md)
+		"decisions.md",     // root-level copy
+		".dal/data/",       // runtime data
+		"now.md",           // state mount leak
+		"decisions/inbox/", // state mount leak
+		"history-buffer/",  // state mount leak
+		"wisdom-inbox/",    // state mount leak
 	}
 	lines := strings.Split(porcelainOutput, "\n")
 	for _, line := range lines {
@@ -611,7 +616,7 @@ func notifyCredentialRefresh(dalName string) {
 
 	player := os.Getenv("DAL_PLAYER")
 	title := "credential 만료로 호스트 sync 필요"
-	detail := fmt.Sprintf("%s credential/auth failed; host에서 sync-dal-creds.sh 실행 필요", player)
+	detail := fmt.Sprintf("%s credential/auth failed; host에서 pve-sync-creds 실행 필요", player)
 	context := fmt.Sprintf("player=%s", player)
 	claim, err := client.Claim(dalName, "blocked", title, detail, context)
 	if err != nil {
@@ -620,7 +625,7 @@ func notifyCredentialRefresh(dalName string) {
 		log.Printf("[agent] credential refresh claim filed for %s: %s", dalName, claim.ID)
 	}
 
-	notice := fmt.Sprintf("[%s] ⚠️ credential 만료. 호스트에서 sync-dal-creds.sh 실행 필요.", dalName)
+	notice := fmt.Sprintf("[%s] ⚠️ credential 만료. 호스트에서 pve-sync-creds 실행 필요.", dalName)
 	if claim != nil && claim.ID != "" {
 		notice = fmt.Sprintf("%s claim=%s", notice, claim.ID)
 	}
@@ -789,18 +794,18 @@ func shouldUseCentralOverride(player, fallbackPlayer, centralPlayer string) bool
 // Priority: DAL_FALLBACK_PLAYER env (from dal.cue) → auto-detect by availability.
 func detectFallback(primary string) string {
 	if fp := os.Getenv("DAL_FALLBACK_PLAYER"); fp != "" {
-		if fp != primary {
+		if fp != primary && providerexec.Exists(fp) {
 			return fp
 		}
-		// fallback_player == primary makes no sense; fall through to auto-detect
+		// fallback_player == primary or unavailable provider makes no sense; fall through.
 	}
 	switch primary {
 	case "claude":
-		if _, err := exec.LookPath("codex"); err == nil {
+		if providerexec.Exists("codex") {
 			return "codex"
 		}
 	case "codex":
-		if _, err := exec.LookPath("claude"); err == nil {
+		if providerexec.Exists("claude") {
 			return "claude"
 		}
 	}
@@ -818,12 +823,20 @@ func runClaude(player, task string) (string, error) {
 	var cmd *exec.Cmd
 	switch player {
 	case "codex":
+		codexPath, err := providerexec.Resolve("codex")
+		if err != nil {
+			return "", err
+		}
 		workDir, _ := os.Getwd()
-		cmd = exec.Command("codex", "exec",
+		cmd = exec.Command(codexPath, "exec",
 			"--dangerously-bypass-approvals-and-sandbox",
 			"-C", workDir,
 			task)
 	default: // claude
+		claudePath, err := providerexec.Resolve("claude")
+		if err != nil {
+			return "", err
+		}
 		// Build allowed tools based on role and extra permissions
 		var allowedTools string
 		if role == "leader" {
@@ -846,7 +859,7 @@ func runClaude(player, task string) (string, error) {
 			claudeArgs = append(claudeArgs, "--model", model)
 		}
 		claudeArgs = append(claudeArgs, "--print", task)
-		cmd = exec.Command("claude", claudeArgs...)
+		cmd = exec.Command(claudePath, claudeArgs...)
 	}
 
 	// Task timeout: max 5 minutes per execution
@@ -1071,6 +1084,14 @@ func shouldIgnoreDalBotMessage(msg bridge.Message, mm *bridge.MattermostBridge, 
 		return true
 	}
 	return false
+}
+
+func isOperationalNoticeMessage(content string) bool {
+	lower := strings.ToLower(content)
+	return (strings.Contains(content, "⚠️ credential 만료") ||
+		strings.Contains(lower, "credential/auth failed")) &&
+		(strings.Contains(content, "sync-dal-creds.sh") ||
+			strings.Contains(content, "pve-sync-creds"))
 }
 
 // reportToLeader sends a summary to the leader bot in the same channel

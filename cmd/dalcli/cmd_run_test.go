@@ -359,6 +359,14 @@ func TestShouldUseCentralOverride(t *testing.T) {
 	}
 }
 
+func TestDetectFallback_IgnoresUnavailableEnvOverride(t *testing.T) {
+	t.Setenv("DAL_FALLBACK_PLAYER", "missing-provider")
+
+	if got := detectFallback("gemini"); got != "" {
+		t.Fatalf("detectFallback should ignore unavailable env override, got %q", got)
+	}
+}
+
 // ── fetchAgentConfig ──
 
 func TestFetchAgentConfig_Success(t *testing.T) {
@@ -477,9 +485,9 @@ func TestMessageRouting_FreeFormFallback(t *testing.T) {
 
 func TestIsDalOnlyChanges(t *testing.T) {
 	tests := []struct {
-		name   string
-		input  string
-		want   bool
+		name  string
+		input string
+		want  bool
 	}{
 		{"dal only", " M .dal/data/claims.json", true},
 		{"dal added", "?? .dal/data/new.json", true},

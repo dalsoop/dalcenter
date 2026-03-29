@@ -162,3 +162,32 @@ func TestClose(t *testing.T) {
 	b.Close()
 	b.Close()
 }
+
+func TestFetchDMChannelIDs_OnlyDirectMessages(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v4/users/bot-123/channels":
+			w.Write([]byte(`[
+				{"id":"main-ch","type":"O"},
+				{"id":"dm-1","type":"D"},
+				{"id":"open-1","type":"O"},
+				{"id":"private-1","type":"P"},
+				{"id":"group-1","type":"G"}
+			]`))
+		default:
+			w.Write([]byte(`{}`))
+		}
+	}))
+	defer srv.Close()
+
+	b := NewMattermostBridge(srv.URL, "token", "main-ch", time.Second)
+	b.BotUserID = "bot-123"
+
+	got, err := b.fetchDMChannelIDs()
+	if err != nil {
+		t.Fatalf("fetchDMChannelIDs: %v", err)
+	}
+	if len(got) != 1 || got[0] != "dm-1" {
+		t.Fatalf("got %v, want [dm-1]", got)
+	}
+}
