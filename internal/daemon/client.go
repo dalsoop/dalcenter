@@ -220,10 +220,16 @@ func (c *Client) Claims(status string) ([]Claim, error) {
 		return nil, fmt.Errorf("daemon unreachable: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("daemon error %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
 	var result struct {
 		Claims []Claim `json:"claims"`
 	}
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("json decode: %w", err)
+	}
 	return result.Claims, nil
 }
 

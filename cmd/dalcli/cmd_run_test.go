@@ -3,9 +3,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -275,6 +277,101 @@ func TestBuildThreadContext_WithAPI(t *testing.T) {
 	}
 }
 
+func TestIsCredentialStatusQuery(t *testing.T) {
+	tests := []struct {
+		name   string
+		prompt string
+		want   bool
+	}{
+		{"korean", "이거 credential 만료 맞아?", true},
+		{"script name", "sync-dal-creds.sh 왜 뜨지", true},
+		{"host sync", "pve-sync-creds 해야 하나", true},
+		{"normal task", "가야 런타임 테스트해봐", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isCredentialStatusQuery(tt.prompt); got != tt.want {
+				t.Fatalf("isCredentialStatusQuery(%q) = %v, want %v", tt.prompt, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildCredentialStatusReply(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("DALCENTER_URL", "")
+
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0755); err != nil {
+		t.Fatalf("mkdir claude dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0755); err != nil {
+		t.Fatalf("mkdir codex dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".claude", ".credentials.json"), []byte(`{"claudeAiOauth":{"expiresAt":1774810659871}}`), 0600); err != nil {
+		t.Fatalf("write claude cred: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".codex", "auth.json"), []byte(`{"tokens":{"expires_at":"2026-03-30T14:59:24Z"}}`), 0600); err != nil {
+		t.Fatalf("write codex cred: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/claims" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"claims": []map[string]any{
+				{
+					"id":           "claim-0019",
+					"title":        "credential 만료로 호스트 sync 필요",
+					"detail":       "claude auth failed",
+					"context":      "kind=credential_sync&player=claude",
+					"status":       "resolved",
+					"timestamp":    "2026-03-29T13:39:43Z",
+					"responded_at": "2026-03-29T13:39:48Z",
+					"response":     "[credential-ops] 완료 player=claude vmid=105 mtime=2026-03-29T13:39:47Z",
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+	t.Setenv("DALCENTER_URL", srv.URL)
+
+	reply, err := buildCredentialStatusReply("leader")
+	if err != nil {
+		t.Fatalf("buildCredentialStatusReply: %v", err)
+	}
+	if !strings.Contains(reply, "open credential claim: 0") {
+		t.Fatalf("reply missing open count: %s", reply)
+	}
+	if !strings.Contains(reply, "claude expiresAt: 2026-03-29T18:57:39Z") {
+		t.Fatalf("reply missing claude expiry: %s", reply)
+	}
+	if !strings.Contains(reply, "codex access token exp: 2026-03-30T14:59:24Z") {
+		t.Fatalf("reply missing codex expiry: %s", reply)
+	}
+	if !strings.Contains(reply, "daemon claim 상태(open/resolved/rejected)로만 자동 sync 진행 여부를 판단합니다.") {
+		t.Fatalf("reply missing neutral sync guidance: %s", reply)
+	}
+}
+
+func TestCredentialStatusQueryInput_UsesLatestTaskOnly(t *testing.T) {
+	task := "dalcenter 에서 원인 찾아오봐"
+	threadPrompt := `[상대방]: [leader] ⚠️ credential 만료. 호스트에서 sync-dal-creds.sh 실행 필요.
+
+---
+너의 이름: leader. 위 대화 맥락을 보고 마지막 메시지에 응답하라. 간결하게.`
+
+	got := credentialStatusQueryInput(task, threadPrompt)
+	if got != task {
+		t.Fatalf("credentialStatusQueryInput() = %q, want latest task %q", got, task)
+	}
+	if isCredentialStatusQuery(got) {
+		t.Fatalf("latest task should not be forced into credential query mode: %q", got)
+	}
+}
+
 func TestBuildThreadContext_Fallback(t *testing.T) {
 	// No DALCENTER_URL → fallback to single message
 	os.Unsetenv("DALCENTER_URL")
@@ -288,6 +385,233 @@ func TestBuildThreadContext_Fallback(t *testing.T) {
 	ctx := buildThreadContext(mm, msg, "test-dal")
 	if !strings.Contains(ctx, "테스트 메시지") {
 		t.Error("fallback should contain message content")
+	}
+}
+
+func TestShouldIgnoreDalBotMessage(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v4/users/bot-leader", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]string{"id": "bot-leader", "username": "dal-leader-emotio"})
+	})
+	mux.HandleFunc("/api/v4/users/bot-reviewer", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]string{"id": "bot-reviewer", "username": "dal-reviewer-emotio"})
+	})
+	mux.HandleFunc("/api/v4/users/human-devops", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]string{"id": "human-devops", "username": "devops"})
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	mm := &bridge.MattermostBridge{URL: srv.URL, Token: "tok"}
+
+	tests := []struct {
+		name            string
+		from            string
+		isDirectMention bool
+		isThreadReply   bool
+		isDM            bool
+		want            bool
+	}{
+		{"human dm allowed", "human-devops", false, false, true, false},
+		{"dal dm ignored", "bot-reviewer", false, false, true, true},
+		{"leader thread followup allowed", "bot-leader", false, true, false, false},
+		{"nonleader thread followup ignored", "bot-reviewer", false, true, false, true},
+		{"direct mention from dal bot allowed", "bot-reviewer", true, true, false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := bridge.Message{From: tt.from, Content: "test"}
+			got := shouldIgnoreDalBotMessage(msg, mm, tt.isDirectMention, tt.isThreadReply, tt.isDM)
+			if got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShouldIgnoreOperationalDalBotMessage(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v4/users/bot-reviewer", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]string{"id": "bot-reviewer", "username": "dal-reviewer-emotio"})
+	})
+	mux.HandleFunc("/api/v4/users/human-devops", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]string{"id": "human-devops", "username": "devops"})
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	mm := &bridge.MattermostBridge{URL: srv.URL, Token: "tok"}
+
+	tests := []struct {
+		name string
+		msg  bridge.Message
+		want bool
+	}{
+		{
+			name: "dal bot operational notice",
+			msg: bridge.Message{
+				From:    "bot-reviewer",
+				Content: "@dal-leader [leader] ⚠️ credential 만료. 호스트에서 sync-dal-creds.sh 실행 필요.",
+			},
+			want: true,
+		},
+		{
+			name: "dal bot normal message",
+			msg: bridge.Message{
+				From:    "bot-reviewer",
+				Content: "@dal-leader 리뷰 끝났어",
+			},
+			want: false,
+		},
+		{
+			name: "human operational text",
+			msg: bridge.Message{
+				From:    "human-devops",
+				Content: "sync-dal-creds.sh 왜 뜨지",
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldIgnoreOperationalDalBotMessage(tt.msg, mm); got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsDirectedAtDifferentDal(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{"plain dm", "로그 좀 봐줘", false},
+		{"self stable mention", "@dal-leader 확인해줘", false},
+		{"self legacy mention", "@dal-leader-emotio 확인해줘", false},
+		{"self short mention", "@leader 확인해줘", false},
+		{"other stable mention", "@dal-reviewer 확인해줘", true},
+		{"other short mention", "@reviewer 확인해줘", true},
+		{"other malformed mention", "@dal-leader-leader 확인해줘", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isDirectedAtDifferentDal(tt.content, "@dal-leader", "@dal-leader-emotio", "@leader")
+			if got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsOperationalNoticeMessage(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{"old credential notice", "@dal-leader [leader] ⚠️ credential 만료. 호스트에서 sync-dal-creds.sh 실행 필요.", true},
+		{"new credential notice", "[verifier] ⚠️ credential 만료. 호스트에서 pve-sync-creds 실행 필요. claim=claim-0001", true},
+		{"normal dm", "호스트에서 로그 좀 확인해줘", false},
+		{"generic warning", "⚠️ 디스크 용량 부족", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isOperationalNoticeMessage(tt.content); got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHandleCredentialStatusQuery_FallbackOnStatusError(t *testing.T) {
+	var sentBody string
+	mmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v4/posts" {
+			http.NotFound(w, r)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		sentBody = string(body)
+		json.NewEncoder(w).Encode(map[string]string{"id": "post-1"})
+	}))
+	defer mmServer.Close()
+
+	t.Setenv("DALCENTER_URL", "http://127.0.0.1:1")
+	mm := &bridge.MattermostBridge{URL: mmServer.URL, Token: "tok", ChannelID: "ch-1"}
+
+	handled, err := handleCredentialStatusQuery("leader", "sync-dal-creds.sh 왜 뜨지", "root-1", "ch-1", mm)
+	if err != nil {
+		t.Fatalf("handleCredentialStatusQuery: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected query to be handled")
+	}
+	if !strings.Contains(sentBody, "credential-ops 상태 조회 실패") {
+		t.Fatalf("expected fallback reply, body=%s", sentBody)
+	}
+	if !strings.Contains(sentBody, "일반 작업으로 넘기지 않고 여기서 중단합니다.") {
+		t.Fatalf("expected deterministic stop message, body=%s", sentBody)
+	}
+}
+
+func TestShouldDisableDM(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{"enabled", "1", true},
+		{"disabled", "0", false},
+		{"unset", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldDisableDM(tt.raw); got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShouldUseCentralOverride(t *testing.T) {
+	tests := []struct {
+		name           string
+		player         string
+		fallbackPlayer string
+		centralPlayer  string
+		want           bool
+	}{
+		{"no central", "claude", "codex", "", false},
+		{"same as primary", "claude", "codex", "claude", false},
+		{"matches fallback", "claude", "codex", "codex", true},
+		{"codex should ignore claude", "codex", "", "claude", false},
+		{"unexpected provider ignored", "claude", "codex", "gemini", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldUseCentralOverride(tt.player, tt.fallbackPlayer, tt.centralPlayer)
+			if got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDetectFallback_IgnoresUnavailableEnvOverride(t *testing.T) {
+	t.Setenv("DAL_FALLBACK_PLAYER", "missing-provider")
+
+	if got := detectFallback("gemini"); got != "" {
+		t.Fatalf("detectFallback should ignore unavailable env override, got %q", got)
 	}
 }
 
@@ -409,9 +733,9 @@ func TestMessageRouting_FreeFormFallback(t *testing.T) {
 
 func TestIsDalOnlyChanges(t *testing.T) {
 	tests := []struct {
-		name   string
-		input  string
-		want   bool
+		name  string
+		input string
+		want  bool
 	}{
 		{"dal only", " M .dal/data/claims.json", true},
 		{"dal added", "?? .dal/data/new.json", true},
