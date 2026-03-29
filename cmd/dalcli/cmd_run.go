@@ -664,6 +664,10 @@ func executeTask(task string) (string, error) {
 			return out, nil
 		}
 		log.Printf("[circuit] fallback %s also failed: %v", fallbackPlayer, err)
+		if strings.TrimSpace(out) != "" {
+			return out, fmt.Errorf("fallback %s failed while primary %s circuit is open: %s", fallbackPlayer, player, truncate(strings.TrimSpace(out), 200))
+		}
+		return out, fmt.Errorf("fallback %s failed while primary %s circuit is open: %w", fallbackPlayer, player, err)
 	}
 
 	var lastOut string
@@ -705,6 +709,10 @@ func executeTask(task string) (string, error) {
 				return fbOut, nil
 			}
 			log.Printf("[circuit] fallback %s failed: %v", fallbackPlayer, fbErr)
+			if strings.TrimSpace(fbOut) != "" {
+				return fbOut, fmt.Errorf("fallback %s failed while primary %s circuit is open: %s", fallbackPlayer, player, truncate(strings.TrimSpace(fbOut), 200))
+			}
+			return fbOut, fmt.Errorf("fallback %s failed while primary %s circuit is open: %w", fallbackPlayer, player, fbErr)
 		}
 
 		// retryable → 대기 후 재시도
