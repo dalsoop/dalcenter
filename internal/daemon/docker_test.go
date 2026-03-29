@@ -170,6 +170,44 @@ func TestPlayerHome(t *testing.T) {
 	}
 }
 
+func TestNeedsClaudeCredentials(t *testing.T) {
+	tests := []struct {
+		player   string
+		fallback string
+		want     bool
+	}{
+		{"claude", "", true},
+		{"codex", "", true},
+		{"gemini", "claude", true},
+		{"gemini", "codex", false},
+		{"gemini", "", false},
+	}
+	for _, tt := range tests {
+		if got := needsClaudeCredentials(tt.player, tt.fallback); got != tt.want {
+			t.Errorf("needsClaudeCredentials(%q, %q) = %v, want %v", tt.player, tt.fallback, got, tt.want)
+		}
+	}
+}
+
+func TestNeedsCodexCredentials(t *testing.T) {
+	tests := []struct {
+		player   string
+		fallback string
+		want     bool
+	}{
+		{"claude", "", true},
+		{"codex", "", true},
+		{"gemini", "codex", true},
+		{"gemini", "claude", false},
+		{"gemini", "", false},
+	}
+	for _, tt := range tests {
+		if got := needsCodexCredentials(tt.player, tt.fallback); got != tt.want {
+			t.Errorf("needsCodexCredentials(%q, %q) = %v, want %v", tt.player, tt.fallback, got, tt.want)
+		}
+	}
+}
+
 // ── JSON round-trip for credential formats ──────────────────────
 
 func TestCredentialFormats_ClaudeRoundTrip(t *testing.T) {

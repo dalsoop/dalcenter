@@ -97,6 +97,14 @@ func playerHome(player string) string {
 	}
 }
 
+func needsClaudeCredentials(player, fallback string) bool {
+	return player == "claude" || player == "codex" || fallback == "claude"
+}
+
+func needsCodexCredentials(player, fallback string) bool {
+	return player == "claude" || player == "codex" || fallback == "codex"
+}
+
 // dockerRun creates and starts a Docker container for a dal.
 // It returns the container ID, any credential warnings, and an error.
 func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *localdal.DalProfile) (string, []string, error) {
@@ -153,12 +161,13 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *
 		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", localdalRoot, filepath.Join(containerWorkDir, ".dal")))
 	}
 
-	// Mount credentials (player-specific)
-	switch dal.Player {
-	case "claude":
+	// Mount credentials needed for primary player and runtime fallback.
+	// Claude containers may execute Codex during local fallback or central override,
+	// and Codex containers may fallback back to Claude.
+	if needsClaudeCredentials(dal.Player, dal.FallbackPlayer) {
 		credPath := filepath.Join(hostHome, ".claude", ".credentials.json")
 		if _, err := os.Stat(credPath); err == nil {
-			args = append(args, "-v", fmt.Sprintf("%s:%s/.credentials.json", credPath, home))
+			args = append(args, "-v", fmt.Sprintf("%s:%s/.credentials.json:ro", credPath, playerHome("claude")))
 			if expired, _ := isCredentialExpired(credPath); expired {
 				w := "Claude credential expired — run: pve-sync-creds"
 				log.Printf("WARNING: %s", w)
@@ -169,10 +178,11 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *
 			log.Printf("WARNING: %s", w)
 			warnings = append(warnings, w)
 		}
-	case "codex":
+	}
+	if needsCodexCredentials(dal.Player, dal.FallbackPlayer) {
 		credPath := filepath.Join(hostHome, ".codex", "auth.json")
 		if _, err := os.Stat(credPath); err == nil {
-			args = append(args, "-v", fmt.Sprintf("%s:%s/auth.json:ro", credPath, home))
+			args = append(args, "-v", fmt.Sprintf("%s:%s/auth.json:ro", credPath, playerHome("codex")))
 			if expired, _ := isCredentialExpired(credPath); expired {
 				w := "Codex credential expired — run: pve-sync-creds"
 				log.Printf("WARNING: %s", w)
@@ -183,7 +193,8 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *
 			log.Printf("WARNING: %s", w)
 			warnings = append(warnings, w)
 		}
-	case "gemini":
+	}
+	if dal.Player == "gemini" {
 		// Gemini uses API key — resolve from dal.cue (VK:/env:), fallback to host env
 		key := dal.GeminiAPIKey
 		if key != "" {
