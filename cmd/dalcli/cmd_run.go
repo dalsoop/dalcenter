@@ -189,8 +189,8 @@ func runAgentLoop(dalName string) error {
 		log.Printf("[agent] msg from=%s mention=%v(m=%q alt=%q) thread=%v dm=%v content=%s",
 			msg.From[:8], isDirectMention, mention, altMention, isThreadReply, isDM, truncate(msg.Content, 60))
 
-		// Ignore dal bot thread replies to prevent cross-bot feedback loops.
-		if isThreadReply && isFromDalBot(msg.From, mm) {
+		// Ignore non-leader dal bot thread replies unless they explicitly target this dal.
+		if shouldIgnoreDalThreadReply(msg.From, msg.Content, mm, mention, stableMention, altMention, isThreadReply) {
 			log.Printf("[agent] skipped dal bot thread reply: %s", truncate(msg.Content, 60))
 			continue
 		}
@@ -1015,6 +1015,22 @@ func isFromLeader(senderID string, mm *bridge.MattermostBridge) bool {
 func isFromDalBot(senderID string, mm *bridge.MattermostBridge) bool {
 	username := mm.GetUsername(senderID)
 	return strings.HasPrefix(username, "dal-")
+}
+
+func shouldIgnoreDalThreadReply(senderID, content string, mm *bridge.MattermostBridge, mention, stableMention, altMention string, isThreadReply bool) bool {
+	if !isThreadReply {
+		return false
+	}
+	if !isFromDalBot(senderID, mm) {
+		return false
+	}
+	if isFromLeader(senderID, mm) {
+		return false
+	}
+	if strings.Contains(content, mention) || strings.Contains(content, stableMention) || strings.Contains(content, altMention) {
+		return false
+	}
+	return true
 }
 
 // reportToLeader sends a summary to the leader bot in the same channel

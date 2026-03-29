@@ -210,16 +210,93 @@ func TestMessageTypeDetection(t *testing.T) {
 	}
 }
 
-func TestThreadReplyFromDalBot_IsIgnoredBySource(t *testing.T) {
+func TestShouldIgnoreDalThreadReply(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v4/users/worker-1":
+			w.Write([]byte(`{"id":"worker-1","username":"dal-dev"}`))
+		case "/api/v4/users/leader-1":
+			w.Write([]byte(`{"id":"leader-1","username":"dal-leader"}`))
+		case "/api/v4/users/user-1":
+			w.Write([]byte(`{"id":"user-1","username":"alice"}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	mm := bridge.NewMattermostBridge(srv.URL, "token", "ch-id", time.Second)
+	mention := "@dal-writer-abcd12"
+	stableMention := "@dal-writer"
+	altMention := "@writer"
+
+	tests := []struct {
+		name        string
+		senderID    string
+		content     string
+		isThread    bool
+		wantIgnored bool
+	}{
+		{
+			name:        "non-leader dal bot thread reply is ignored",
+			senderID:    "worker-1",
+			content:     "이거 다시 봐",
+			isThread:    true,
+			wantIgnored: true,
+		},
+		{
+			name:        "leader dal bot thread reply is allowed",
+			senderID:    "leader-1",
+			content:     "이거 다시 봐",
+			isThread:    true,
+			wantIgnored: false,
+		},
+		{
+			name:        "explicit stable mention from dal bot is allowed",
+			senderID:    "worker-1",
+			content:     "@dal-writer 이거 다시 봐",
+			isThread:    true,
+			wantIgnored: false,
+		},
+		{
+			name:        "explicit alt mention from dal bot is allowed",
+			senderID:    "worker-1",
+			content:     "@writer 이거 다시 봐",
+			isThread:    true,
+			wantIgnored: false,
+		},
+		{
+			name:        "human thread reply is allowed",
+			senderID:    "user-1",
+			content:     "이거 다시 봐",
+			isThread:    true,
+			wantIgnored: false,
+		},
+		{
+			name:        "non-thread dal bot message is allowed",
+			senderID:    "worker-1",
+			content:     "이거 다시 봐",
+			isThread:    false,
+			wantIgnored: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldIgnoreDalThreadReply(tt.senderID, tt.content, mm, mention, stableMention, altMention, tt.isThread)
+			if got != tt.wantIgnored {
+				t.Fatalf("ignored = %v, want %v", got, tt.wantIgnored)
+			}
+		})
+	}
+}
+
+func TestStableMentionSourceExists(t *testing.T) {
 	src, err := os.ReadFile("cmd_run.go")
 	if err != nil {
 		t.Fatalf("read source: %v", err)
 	}
-	text := string(src)
-	if !strings.Contains(text, "isFromDalBot(msg.From, mm)") {
-		t.Fatal("thread replies from dal bots must be ignored")
-	}
-	if !strings.Contains(text, "stableMention := fmt.Sprintf(\"@dal-%s\", dalName)") {
+	if !strings.Contains(string(src), "stableMention := fmt.Sprintf(\"@dal-%s\", dalName)") {
 		t.Fatal("stable @dal-{name} mention must be recognized")
 	}
 }
