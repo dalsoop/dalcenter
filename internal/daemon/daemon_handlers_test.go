@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -40,6 +41,46 @@ func TestHandleLogs_DalFound(t *testing.T) {
 	// Will fail because Docker is not available, but should NOT be 404
 	if w.Code == 404 {
 		t.Fatal("should find the dal, even if Docker fails")
+	}
+}
+
+func TestHandleRunPage_TaskFound(t *testing.T) {
+	d := &Daemon{
+		tasks: newTaskStore(),
+	}
+	tr := d.tasks.New("leader", "triage issue")
+	tr.Output = "still running"
+
+	req := httptest.NewRequest("GET", "/runs/"+tr.ID, nil)
+	req.SetPathValue("id", tr.ID)
+	w := httptest.NewRecorder()
+
+	d.handleRunPage(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "run "+tr.ID) {
+		t.Fatalf("expected run id in body: %s", body)
+	}
+	if !strings.Contains(body, `fetch("/api/task/" + taskId`) {
+		t.Fatalf("expected polling endpoint in body: %s", body)
+	}
+}
+
+func TestHandleRunPage_TaskNotFound(t *testing.T) {
+	d := &Daemon{
+		tasks: newTaskStore(),
+	}
+	req := httptest.NewRequest("GET", "/runs/task-404", nil)
+	req.SetPathValue("id", "task-404")
+	w := httptest.NewRecorder()
+
+	d.handleRunPage(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
 	}
 }
 
@@ -84,8 +125,8 @@ func TestDalCuePath(t *testing.T) {
 
 func TestHandleMessage_NoMM(t *testing.T) {
 	d := &Daemon{
-		mm:        nil,
-		channelID: "",
+		mm:         nil,
+		channelID:  "",
 		containers: map[string]*Container{},
 	}
 
@@ -123,10 +164,18 @@ func TestHandlePs_OutputFormat(t *testing.T) {
 }
 
 // nopCloser wraps a string as an io.ReadCloser for request body
-type nopReader struct{ data []byte; pos int }
-func (r *nopReader) Read(p []byte) (int, error) {
-	if r.pos >= len(r.data) { return 0, nil }
-	n := copy(p, r.data[r.pos:]); r.pos += n; return n, nil
+type nopReader struct {
+	data []byte
+	pos  int
 }
-func (r *nopReader) Close() error { return nil }
+
+func (r *nopReader) Read(p []byte) (int, error) {
+	if r.pos >= len(r.data) {
+		return 0, nil
+	}
+	n := copy(p, r.data[r.pos:])
+	r.pos += n
+	return n, nil
+}
+func (r *nopReader) Close() error   { return nil }
 func nopCloser(s string) *nopReader { return &nopReader{data: []byte(s)} }

@@ -110,6 +110,46 @@ func TestHandleTaskStatus_NotFound(t *testing.T) {
 	}
 }
 
+func TestHandleTaskStartAndFinish(t *testing.T) {
+	d := New(":0", "/tmp/test", t.TempDir(), nil)
+
+	startReq := httptest.NewRequest("POST", "/api/task/start", strings.NewReader(`{"dal":"leader","task":"triage issue"}`))
+	startW := httptest.NewRecorder()
+	d.handleTaskStart(startW, startReq)
+	if startW.Code != http.StatusAccepted {
+		t.Fatalf("start status = %d, want 202", startW.Code)
+	}
+	var started map[string]string
+	if err := json.NewDecoder(startW.Body).Decode(&started); err != nil {
+		t.Fatal(err)
+	}
+	if started["task_id"] == "" {
+		t.Fatal("expected task_id")
+	}
+
+	finishReq := httptest.NewRequest("POST", "/api/task/"+started["task_id"]+"/finish", strings.NewReader(`{"status":"done","output":"ok","error":""}`))
+	finishReq.SetPathValue("id", started["task_id"])
+	finishW := httptest.NewRecorder()
+	d.handleTaskFinish(finishW, finishReq)
+	if finishW.Code != http.StatusOK {
+		t.Fatalf("finish status = %d, want 200", finishW.Code)
+	}
+
+	tr := d.tasks.Get(started["task_id"])
+	if tr == nil {
+		t.Fatal("expected tracked task")
+	}
+	if tr.Status != "done" {
+		t.Fatalf("status = %s, want done", tr.Status)
+	}
+	if tr.Output != "ok" {
+		t.Fatalf("output = %q, want ok", tr.Output)
+	}
+	if tr.DoneAt == nil {
+		t.Fatal("expected DoneAt to be set")
+	}
+}
+
 func TestTruncateStr(t *testing.T) {
 	if truncateStr("hello", 10) != "hello" {
 		t.Error("should not truncate short string")

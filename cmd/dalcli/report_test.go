@@ -101,6 +101,16 @@ func TestDM_ResponseIncludesChannel(t *testing.T) {
 	}
 }
 
+func TestRunStatus_UsesRunPageLink(t *testing.T) {
+	src := readSrc(t, "cmd_run.go")
+	if !strings.Contains(src, "실행 보기") {
+		t.Fatal("status message should prefer run page link")
+	}
+	if !strings.Contains(src, "/runs/%s") {
+		t.Fatal("status message should link to /runs/{task_id}")
+	}
+}
+
 // ── 타임아웃 테스트 ──────────────────────────────────────
 
 func TestTimeout_ContextUsed(t *testing.T) {

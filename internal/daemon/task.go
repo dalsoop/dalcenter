@@ -13,13 +13,13 @@ import (
 
 // taskResult holds the result of a direct task execution.
 type taskResult struct {
-	ID        string    `json:"id"`
-	Dal       string    `json:"dal"`
-	Task      string    `json:"task"`
-	Output    string    `json:"output"`
-	Error     string    `json:"error,omitempty"`
-	Status    string    `json:"status"` // "running", "done", "failed"
-	StartedAt time.Time `json:"started_at"`
+	ID        string     `json:"id"`
+	Dal       string     `json:"dal"`
+	Task      string     `json:"task"`
+	Output    string     `json:"output"`
+	Error     string     `json:"error,omitempty"`
+	Status    string     `json:"status"` // "running", "done", "failed", "blocked", "noop"
+	StartedAt time.Time  `json:"started_at"`
 	DoneAt    *time.Time `json:"done_at,omitempty"`
 	// Post-task verification
 	GitDiff    string `json:"git_diff,omitempty"`    // workspace git diff after task
@@ -85,6 +85,68 @@ func (s *taskStore) List() []*taskResult {
 		result = append(result, t)
 	}
 	return result
+}
+
+func (s *taskStore) Complete(id, status, output, errMsg string) *taskResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tr := s.tasks[id]
+	if tr == nil {
+		return nil
+	}
+	now := time.Now().UTC()
+	tr.Status = status
+	tr.Output = output
+	tr.Error = errMsg
+	tr.DoneAt = &now
+	return tr
+}
+
+// handleTaskStart registers a tracked task without executing it inside the daemon.
+// POST /api/task/start
+func (d *Daemon) handleTaskStart(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Dal  string `json:"dal"`
+		Task string `json:"task"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if req.Dal == "" || req.Task == "" {
+		http.Error(w, "dal and task are required", http.StatusBadRequest)
+		return
+	}
+	tr := d.tasks.New(req.Dal, req.Task)
+	respondJSON(w, http.StatusAccepted, map[string]string{
+		"task_id": tr.ID,
+		"status":  tr.Status,
+	})
+}
+
+// handleTaskFinish marks a previously registered tracked task as complete.
+// POST /api/task/{id}/finish
+func (d *Daemon) handleTaskFinish(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req struct {
+		Status string `json:"status"`
+		Output string `json:"output"`
+		Error  string `json:"error"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if req.Status == "" {
+		http.Error(w, "status is required", http.StatusBadRequest)
+		return
+	}
+	tr := d.tasks.Complete(id, req.Status, req.Output, req.Error)
+	if tr == nil {
+		http.Error(w, "task not found", http.StatusNotFound)
+		return
+	}
+	respondJSON(w, http.StatusOK, tr)
 }
 
 // handleTask executes a task directly inside a dal container via docker exec.

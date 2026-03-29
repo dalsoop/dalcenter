@@ -285,10 +285,12 @@ type TaskResult struct {
 	ID     string `json:"task_id,omitempty"`
 	Status string `json:"status"`
 	// Full result fields (when polling)
-	Dal    string `json:"dal,omitempty"`
-	Task   string `json:"task,omitempty"`
-	Output string `json:"output,omitempty"`
-	Error  string `json:"error,omitempty"`
+	Dal       string  `json:"dal,omitempty"`
+	Task      string  `json:"task,omitempty"`
+	Output    string  `json:"output,omitempty"`
+	Error     string  `json:"error,omitempty"`
+	StartedAt string  `json:"started_at,omitempty"`
+	DoneAt    *string `json:"done_at,omitempty"`
 }
 
 // Task submits a direct task to a dal container. If async=true, returns immediately with a task ID.
@@ -326,6 +328,56 @@ func (c *Client) TaskStatus(id string) (*TaskResult, error) {
 	b, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("task not found: %s", strings.TrimSpace(string(b)))
+	}
+	var result TaskResult
+	json.Unmarshal(b, &result)
+	return &result, nil
+}
+
+// StartTaskRun registers a tracked task for an external execution path such as Mattermost.
+func (c *Client) StartTaskRun(dal, task string) (*TaskResult, error) {
+	body := fmt.Sprintf(`{"dal":%q,"task":%q}`, dal, task)
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/task/start", strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiToken)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("daemon unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("task start failed: %s", strings.TrimSpace(string(b)))
+	}
+	var result TaskResult
+	json.Unmarshal(b, &result)
+	return &result, nil
+}
+
+// FinishTaskRun finalizes a tracked task created by StartTaskRun.
+func (c *Client) FinishTaskRun(id, status, output, errMsg string) (*TaskResult, error) {
+	body := fmt.Sprintf(`{"status":%q,"output":%q,"error":%q}`, status, output, errMsg)
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/task/"+id+"/finish", strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiToken)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("daemon unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("task finish failed: %s", strings.TrimSpace(string(b)))
 	}
 	var result TaskResult
 	json.Unmarshal(b, &result)
