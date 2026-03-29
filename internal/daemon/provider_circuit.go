@@ -64,16 +64,18 @@ func (pc *ProviderCircuit) ActiveProvider() string {
 
 // Status returns circuit state for API response.
 func (pc *ProviderCircuit) Status() map[string]interface{} {
+	active := pc.ActiveProvider()
+
 	pc.mu.RLock()
 	defer pc.mu.RUnlock()
 
 	result := map[string]interface{}{
-		"active_provider": pc.activePlayer,
+		"active_provider": active,
 		"primary":         pc.primary,
 		"fallback":        pc.fallback,
 		"cooldown":        pc.cooldown.String(),
 	}
-	if pc.activePlayer == pc.fallback && !pc.trippedAt.IsZero() {
+	if active == pc.fallback && !pc.trippedAt.IsZero() {
 		remaining := pc.cooldown - time.Since(pc.trippedAt)
 		if remaining < 0 {
 			remaining = 0
