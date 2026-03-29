@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -60,6 +61,88 @@ func TestTruncate(t *testing.T) {
 }
 
 // ── formatReport ──
+
+func TestCollectTaskVerification_IgnoresExistingDirtyState(t *testing.T) {
+	repo := setupVerificationWorkspace(t)
+	prev := workspaceDir
+	workspaceDir = repo
+	defer func() { workspaceDir = prev }()
+
+	writeFile(t, repo, "README.md", "dirty-before\n")
+	before, err := captureWorkspaceGitState()
+	if err != nil {
+		t.Fatalf("captureWorkspaceGitState: %v", err)
+	}
+
+	snapshot := collectTaskVerification(before)
+	if snapshot.Verified != "no_changes" {
+		t.Fatalf("verified = %q, want no_changes", snapshot.Verified)
+	}
+	if snapshot.GitChanges != 0 {
+		t.Fatalf("git changes = %d, want 0", snapshot.GitChanges)
+	}
+	if snapshot.Completion == nil || !snapshot.Completion.Skipped {
+		t.Fatalf("completion = %+v, want skipped", snapshot.Completion)
+	}
+}
+
+func TestCollectTaskVerification_DetectsChangesToAlreadyDirtyFile(t *testing.T) {
+	repo := setupVerificationWorkspace(t)
+	prev := workspaceDir
+	workspaceDir = repo
+	defer func() { workspaceDir = prev }()
+
+	writeFile(t, repo, "README.md", "dirty-before\n")
+	before, err := captureWorkspaceGitState()
+	if err != nil {
+		t.Fatalf("captureWorkspaceGitState: %v", err)
+	}
+	writeFile(t, repo, "README.md", "dirty-after\n")
+
+	snapshot := collectTaskVerification(before)
+	if snapshot.Verified != "yes" {
+		t.Fatalf("verified = %q, want yes", snapshot.Verified)
+	}
+	if snapshot.GitChanges != 1 {
+		t.Fatalf("git changes = %d, want 1", snapshot.GitChanges)
+	}
+	if !strings.Contains(snapshot.GitDiff, "README.md") {
+		t.Fatalf("git diff should mention README.md, got %q", snapshot.GitDiff)
+	}
+	if snapshot.Completion == nil || !snapshot.Completion.Skipped || snapshot.Completion.SkipReason != "go.mod not found" {
+		t.Fatalf("completion = %+v, want go.mod skip", snapshot.Completion)
+	}
+}
+
+func setupVerificationWorkspace(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test User")
+	writeFile(t, repo, "README.md", "clean\n")
+	runGit(t, repo, "add", "README.md")
+	runGit(t, repo, "commit", "-m", "init")
+	return repo
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+	}
+}
+
+func writeFile(t *testing.T, dir, rel, content string) {
+	t.Helper()
+	path := filepath.Join(dir, rel)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", rel, err)
+	}
+}
 
 func TestFormatReport(t *testing.T) {
 	report := formatReport("done")
