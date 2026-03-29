@@ -652,16 +652,20 @@ func executeTask(task string) (string, error) {
 
 	// Check centralized provider circuit first (dalcenter daemon level)
 	if centralPlayer := fetchCentralProvider(); centralPlayer != "" && centralPlayer != player {
-		log.Printf("[central-circuit] using %s (central override)", centralPlayer)
-		out, err := runProvider(centralPlayer, task)
-		if err == nil {
-			return out, nil
+		if fallbackPlayer == "" || centralPlayer != fallbackPlayer {
+			log.Printf("[central-circuit] ignoring active provider %s for primary %s (fallback=%s)", centralPlayer, player, fallbackPlayer)
+		} else {
+			log.Printf("[central-circuit] using %s (central override)", centralPlayer)
+			out, err := runProvider(centralPlayer, task)
+			if err == nil {
+				return out, nil
+			}
+			log.Printf("[central-circuit] %s failed while primary %s is disabled: %v", centralPlayer, player, err)
+			if strings.TrimSpace(out) != "" {
+				return out, fmt.Errorf("central provider %s failed while primary %s is rate-limited: %s", centralPlayer, player, truncate(strings.TrimSpace(out), 200))
+			}
+			return out, fmt.Errorf("central provider %s failed while primary %s is rate-limited: %w", centralPlayer, player, err)
 		}
-		log.Printf("[central-circuit] %s failed while primary %s is disabled: %v", centralPlayer, player, err)
-		if strings.TrimSpace(out) != "" {
-			return out, fmt.Errorf("central provider %s failed while primary %s is rate-limited: %s", centralPlayer, player, truncate(strings.TrimSpace(out), 200))
-		}
-		return out, fmt.Errorf("central provider %s failed while primary %s is rate-limited: %w", centralPlayer, player, err)
 	}
 
 	// Local circuit breaker fallback

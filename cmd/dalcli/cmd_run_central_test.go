@@ -163,3 +163,46 @@ func TestExecuteTask_CircuitOpensAndStopsRetryingPrimaryAfterFallbackFailure(t *
 		t.Fatalf("fallback should be invoked exactly once after circuit opens, got %d", got)
 	}
 }
+
+func TestExecuteTask_CentralOverrideIgnoredWhenNotAvailableFallback(t *testing.T) {
+	providerCircuit = NewCircuitBreaker(3, 2*time.Minute)
+	defer func() { providerCircuit = NewCircuitBreaker(3, 2*time.Minute) }()
+
+	tmpDir := t.TempDir()
+	primaryMarker := filepath.Join(tmpDir, "codex-called")
+
+	writeExecutable(t, tmpDir, "codex", fmt.Sprintf("#!/bin/sh\necho called > %s\necho primary-codex-ok\n", primaryMarker))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/provider-status" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"active_provider":"claude"}`))
+	}))
+	defer srv.Close()
+
+	oldPath := os.Getenv("PATH")
+	os.Setenv("PATH", tmpDir)
+	os.Setenv("DALCENTER_URL", srv.URL)
+	os.Setenv("DAL_PLAYER", "codex")
+	os.Setenv("DAL_ROLE", "member")
+	os.Setenv("DAL_MAX_DURATION", "1s")
+	defer os.Setenv("PATH", oldPath)
+	defer os.Unsetenv("DALCENTER_URL")
+	defer os.Unsetenv("DAL_PLAYER")
+	defer os.Unsetenv("DAL_ROLE")
+	defer os.Unsetenv("DAL_MAX_DURATION")
+
+	out, err := executeTask("test")
+	if err != nil {
+		t.Fatalf("executeTask returned error: %v", err)
+	}
+	if strings.TrimSpace(out) != "primary-codex-ok" {
+		t.Fatalf("output = %q, want primary codex output", out)
+	}
+	if _, statErr := os.Stat(primaryMarker); statErr != nil {
+		t.Fatalf("codex should be invoked: %v", statErr)
+	}
+}
