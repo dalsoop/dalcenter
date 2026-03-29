@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 )
@@ -85,5 +86,23 @@ func TestHandleAgentConfig_NoMM(t *testing.T) {
 
 	if resp["mm_url"] != "" {
 		t.Errorf("mm_url should be empty when mm is nil, got %q", resp["mm_url"])
+	}
+}
+
+func TestHandleAgentTokenRefresh_RequiresMattermost(t *testing.T) {
+	d := &Daemon{
+		containers: map[string]*Container{
+			"leader": {DalName: "leader", UUID: "leader-uuid"},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/agent-config/leader/refresh-token", nil)
+	req.SetPathValue("name", "leader")
+	w := httptest.NewRecorder()
+
+	d.handleAgentTokenRefresh(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusInternalServerError)
 	}
 }

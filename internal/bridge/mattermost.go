@@ -19,13 +19,14 @@ var ErrAuthFailed = errors.New("auth failed (token invalid or expired)")
 // MattermostBridge implements Bridge using Mattermost REST API polling.
 type MattermostBridge struct {
 	URL          string
-	Token        string
 	ChannelID    string
 	BotUserID    string
 	NoDM         bool             // disable DM channel polling
 	dmLastAt     map[string]int64 // per-DM-channel lastAt
 	PollInterval time.Duration
 
+	tokenMu  sync.RWMutex
+	Token    string
 	messages chan Message
 	errors   chan error
 	done     chan struct{}
@@ -62,6 +63,17 @@ func (m *MattermostBridge) Connect() error {
 
 func (m *MattermostBridge) Listen() <-chan Message { return m.messages }
 func (m *MattermostBridge) Errors() <-chan error   { return m.errors }
+func (m *MattermostBridge) UpdateToken(token string) {
+	m.tokenMu.Lock()
+	defer m.tokenMu.Unlock()
+	m.Token = token
+}
+
+func (m *MattermostBridge) token() string {
+	m.tokenMu.RLock()
+	defer m.tokenMu.RUnlock()
+	return m.Token
+}
 
 func (m *MattermostBridge) Send(msg Message) error {
 	rootID := msg.RootID
@@ -213,10 +225,10 @@ func (m *MattermostBridge) fetchNewPosts() ([]Message, error) {
 				m.lastAt = post.CreateAt
 			}
 			// Skip own messages at bridge level to prevent self-response loops
-		if post.UserID == m.BotUserID {
-			continue
-		}
-		allMsgs = append(allMsgs, Message{
+			if post.UserID == m.BotUserID {
+				continue
+			}
+			allMsgs = append(allMsgs, Message{
 				ID:        post.ID,
 				From:      post.UserID,
 				Channel:   post.ChannelID,
@@ -280,7 +292,7 @@ func (m *MattermostBridge) fetchDMChannelIDs() ([]string, error) {
 
 func (m *MattermostBridge) apiGet(path string) ([]byte, error) {
 	req, _ := http.NewRequest("GET", m.URL+path, nil)
-	req.Header.Set("Authorization", "Bearer "+m.Token)
+	req.Header.Set("Authorization", "Bearer "+m.token())
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -298,7 +310,7 @@ func (m *MattermostBridge) apiGet(path string) ([]byte, error) {
 
 func (m *MattermostBridge) apiPost(path, jsonBody string) ([]byte, error) {
 	req, _ := http.NewRequest("POST", m.URL+path, strings.NewReader(jsonBody))
-	req.Header.Set("Authorization", "Bearer "+m.Token)
+	req.Header.Set("Authorization", "Bearer "+m.token())
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

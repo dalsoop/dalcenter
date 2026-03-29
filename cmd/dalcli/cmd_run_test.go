@@ -823,6 +823,39 @@ func TestFetchAgentConfig_ServerError(t *testing.T) {
 	}
 }
 
+func TestRefreshAgentConfig_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/api/agent-config/writer/refresh-token" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(map[string]string{
+			"dal_name":     "writer",
+			"bot_token":    "fresh-token",
+			"bot_username": "dal-writer-abcd",
+			"channel_id":   "ch-abc",
+			"mm_url":       "http://mm:8065",
+		})
+	}))
+	defer srv.Close()
+
+	os.Setenv("DALCENTER_URL", srv.URL)
+	defer os.Unsetenv("DALCENTER_URL")
+
+	cfg, err := refreshAgentConfig("writer")
+	if err != nil {
+		t.Fatalf("refreshAgentConfig: %v", err)
+	}
+	if cfg.BotToken != "fresh-token" {
+		t.Fatalf("token = %q", cfg.BotToken)
+	}
+	if cfg.BotUsername != "dal-writer-abcd" {
+		t.Fatalf("bot username = %q", cfg.BotUsername)
+	}
+}
+
 // ── executeTask role branching (verify command construction) ──
 
 func TestExecuteTask_RoleBranching(t *testing.T) {

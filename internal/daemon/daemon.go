@@ -292,6 +292,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /api/sync", d.requireAuth(d.handleSync))
 	mux.HandleFunc("POST /api/message", d.requireAuth(d.handleMessage))
 	mux.HandleFunc("GET /api/agent-config/{name}", d.handleAgentConfig)
+	mux.HandleFunc("POST /api/agent-config/{name}/refresh-token", d.handleAgentTokenRefresh)
 	// Direct task execution (works without Mattermost)
 	mux.HandleFunc("POST /api/task", d.requireAuth(d.handleTask))
 	mux.HandleFunc("POST /api/task/start", d.requireAuth(d.handleTaskStart))
@@ -1127,14 +1128,34 @@ func extractInstanceName(containerName string) string {
 // Called by dalcli run inside the container.
 func (d *Daemon) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	d.mu.RLock()
-	c, ok := d.containers[name]
-	d.mu.RUnlock()
+	c, ok := d.agentContainer(name)
 	if !ok {
 		http.Error(w, "dal not found", 404)
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(d.agentConfigResponse(name, c))
+}
 
+func (d *Daemon) handleAgentTokenRefresh(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	c, err := d.refreshAgentBotToken(name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(d.agentConfigResponse(name, c))
+}
+
+func (d *Daemon) agentContainer(name string) (*Container, bool) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	c, ok := d.containers[name]
+	return c, ok
+}
+
+func (d *Daemon) agentConfigResponse(name string, c *Container) map[string]string {
 	resp := map[string]string{
 		"dal_name":     c.DalName,
 		"uuid":         c.UUID,
@@ -1158,9 +1179,64 @@ func (d *Daemon) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
 	if len(teammates) > 0 {
 		resp["team_members"] = strings.Join(teammates, ",")
 	}
+	return resp
+}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+func (d *Daemon) refreshAgentBotToken(name string) (*Container, error) {
+	if d.mm == nil || d.mm.URL == "" || d.channelID == "" {
+		return nil, fmt.Errorf("mattermost not configured")
+	}
+	c, ok := d.agentContainer(name)
+	if !ok {
+		return nil, fmt.Errorf("dal %q not found", name)
+	}
+
+	dal, err := localdal.ReadDalCue(d.dalCuePath(name), name)
+	if err != nil {
+		if idx := strings.LastIndex(name, "-"); idx > 0 {
+			baseName := name[:idx]
+			dal, err = localdal.ReadDalCue(d.dalCuePath(baseName), baseName)
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load dal profile: %w", err)
+	}
+
+	teamID, _, err := talk.GetTeamAndChannel(d.mm.URL, d.mm.AdminToken, d.mm.TeamName, filepath.Base(d.serviceRepo))
+	if err != nil {
+		return nil, fmt.Errorf("resolve mattermost team/channel: %w", err)
+	}
+
+	botUsername := c.BotUsername
+	if botUsername == "" {
+		botUsername = dalBotUsername(d.serviceRepo, dal.Name, dal.UUID)
+	}
+	bot, err := talk.SetupBot(d.mm.URL, d.mm.AdminToken, teamID, d.channelID, botUsername, dal.Name, fmt.Sprintf("dal %s (%s)", dal.Name, dal.Role))
+	if err != nil {
+		return nil, fmt.Errorf("refresh bot token: %w", err)
+	}
+
+	d.mu.Lock()
+	current, ok := d.containers[name]
+	if !ok {
+		d.mu.Unlock()
+		return nil, fmt.Errorf("dal %q disappeared during refresh", name)
+	}
+	current.BotToken = bot.Token
+	current.BotUsername = botUsername
+	currentCopy := *current
+	d.mu.Unlock()
+
+	d.registry.Set(currentCopy.UUID, RegistryEntry{
+		Name:        name,
+		Repo:        d.serviceRepo,
+		ContainerID: currentCopy.ContainerID,
+		BotToken:    bot.Token,
+		Status:      currentCopy.Status,
+	})
+
+	log.Printf("[daemon] refreshed mattermost bot token for %s (%s)", name, botUsername)
+	return &currentCopy, nil
 }
 
 func (d *Daemon) dalCuePath(name string) string {

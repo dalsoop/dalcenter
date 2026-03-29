@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -450,6 +451,50 @@ func dalcenterClientOrFallback() (*daemon.Client, error) {
 	return nil, fmt.Errorf("DALCENTER_URL not set")
 }
 
+func refreshAgentConfig(dalName string) (*agentConfig, error) {
+	client, err := dalcenterClientOrFallback()
+	if err != nil {
+		return nil, err
+	}
+	result, err := client.RefreshAgentToken(dalName)
+	if err != nil {
+		return nil, err
+	}
+	return &agentConfig{
+		DalName:     result["dal_name"],
+		BotToken:    result["bot_token"],
+		BotUsername: result["bot_username"],
+		ChannelID:   result["channel_id"],
+		MMURL:       result["mm_url"],
+		TeamMembers: result["team_members"],
+	}, nil
+}
+
+func sendMattermostMessage(mm *bridge.MattermostBridge, dalName string, cfg *agentConfig, msg bridge.Message) error {
+	err := mm.Send(msg)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, bridge.ErrAuthFailed) {
+		return err
+	}
+	refreshed, refreshErr := refreshAgentConfig(dalName)
+	if refreshErr != nil {
+		return fmt.Errorf("refresh bot token: %w", refreshErr)
+	}
+	if refreshed.BotToken == "" {
+		return fmt.Errorf("refresh bot token: empty token")
+	}
+	mm.UpdateToken(refreshed.BotToken)
+	if cfg != nil {
+		*cfg = *refreshed
+		if refreshed.TeamMembers != "" {
+			os.Setenv("DAL_TEAM_MEMBERS", refreshed.TeamMembers)
+		}
+	}
+	return mm.Send(msg)
+}
+
 func runCmd(dalName string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "run",
@@ -679,11 +724,13 @@ func runAgentLoop(dalName string) error {
 		} else {
 			statusMsg = "💬 작업 중..."
 		}
-		mm.Send(bridge.Message{
+		if err := sendMattermostMessage(mm, dalName, cfg, bridge.Message{
 			Content: statusMsg,
 			Channel: spec.Channel,
 			ReplyTo: spec.ThreadID,
-		})
+		}); err != nil {
+			log.Printf("[agent] status send failed: %v", err)
+		}
 
 		beforeVerification, beforeErr := captureWorkspaceGitState()
 		if beforeErr != nil {
@@ -699,11 +746,13 @@ func runAgentLoop(dalName string) error {
 			if shouldRetry, fix := selfRepair(spec.Prompt, output, err); shouldRetry {
 				log.Printf("[agent] self-repair applied: %s, retrying", fix)
 				appendTrackedRunEvent(taskRunID, "self_repair", fmt.Sprintf("Self-repair applied: %s", fix))
-				mm.Send(bridge.Message{
+				if err := sendMattermostMessage(mm, dalName, cfg, bridge.Message{
 					Content: fmt.Sprintf("🔧 자가 수리: %s — 재시도 중...", fix),
 					Channel: spec.Channel,
 					ReplyTo: spec.ThreadID,
-				})
+				}); err != nil {
+					log.Printf("[agent] self-repair send failed: %v", err)
+				}
 				result = runTaskSpec(spec)
 				output, err = result.Output, result.Err
 			}
@@ -719,11 +768,13 @@ func runAgentLoop(dalName string) error {
 				if runURL != "" {
 					failureMsg += fmt.Sprintf("\n\n[실행 보기](%s)", runURL)
 				}
-				mm.Send(bridge.Message{
+				if err := sendMattermostMessage(mm, dalName, cfg, bridge.Message{
 					Content: failureMsg,
 					Channel: spec.Channel,
 					ReplyTo: spec.ThreadID,
-				})
+				}); err != nil {
+					log.Printf("[agent] failure send failed: %v", err)
+				}
 				appendHistoryBuffer(dalName, spec.Prompt, err.Error(), string(result.State))
 				escalateToHost(dalName, spec.Prompt, output, string(class))
 				daemon.DispatchTaskFailed(dalName, truncate(spec.Prompt, 200), err.Error(), len(output))
@@ -784,11 +835,13 @@ func runAgentLoop(dalName string) error {
 			response += fmt.Sprintf("\n\n[실행 보기](%s)", runURL)
 		}
 
-		mm.Send(bridge.Message{
+		if err := sendMattermostMessage(mm, dalName, cfg, bridge.Message{
 			Content: response,
 			Channel: spec.Channel,
 			ReplyTo: spec.ThreadID,
-		})
+		}); err != nil {
+			log.Printf("[agent] final send failed: %v", err)
+		}
 
 		// Report to leader: when a member dal receives a direct task from user (not from leader),
 		// notify the leader so they stay in the loop
