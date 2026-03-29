@@ -3,13 +3,15 @@ package daemon
 import (
 	"encoding/json"
 	"fmt"
-	"time"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/dalsoop/dalcenter/internal/localdal"
 )
 
 // ── #121: Claude Code autoApprove injection ──────────────────
@@ -115,7 +117,7 @@ func TestHandleAgentConfig_SkipsEmptyBotUsername(t *testing.T) {
 func TestContainerHasBotUsername(t *testing.T) {
 	c := &Container{
 		DalName:     "dev",
-		BotUsername:  "dal-dev-abc123",
+		BotUsername: "dal-dev-abc123",
 	}
 	if c.BotUsername == "" {
 		t.Fatal("Container must have BotUsername field")
@@ -135,6 +137,72 @@ func TestDalBotUsername_Format(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("dalBotUsername(%q, %q) = %q, want %q", tc.name, tc.uuid, got, tc.want)
 		}
+	}
+}
+
+func TestEnsureBotForDal_RecreatesTokenForExistingBot(t *testing.T) {
+	var createdToken bool
+	mmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/v4/teams":
+			w.Write([]byte(`[{"id":"team-1","name":"prelik"}]`))
+		case r.Method == "GET" && r.URL.Path == "/api/v4/teams/team-1/channels/name/veilkey-v2":
+			w.Write([]byte(`{"id":"ch-main"}`))
+		case r.Method == "POST" && r.URL.Path == "/api/v4/bots":
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"message":"bot already exists"}`))
+		case r.Method == "GET" && r.URL.Path == "/api/v4/bots":
+			w.Write([]byte(`[{"user_id":"user-1","username":"dal-dev"}]`))
+		case r.Method == "POST" && r.URL.Path == "/api/v4/bots/user-1/enable":
+			w.Write([]byte(`{}`))
+		case r.Method == "GET" && r.URL.Path == "/api/v4/users/user-1/tokens":
+			w.Write([]byte(`[]`))
+		case r.Method == "POST" && r.URL.Path == "/api/v4/users/user-1/tokens":
+			createdToken = true
+			w.Write([]byte(`{"token":"restored-bot-token","id":"tok-1"}`))
+		case r.Method == "POST" && r.URL.Path == "/api/v4/teams/team-1/members":
+			w.Write([]byte(`{}`))
+		case r.Method == "POST" && r.URL.Path == "/api/v4/channels/ch-main/members":
+			w.Write([]byte(`{}`))
+		case r.Method == "GET" && r.URL.Path == "/api/v4/users/user-1/channels":
+			w.Write([]byte(`[]`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer mmServer.Close()
+
+	d := &Daemon{
+		serviceRepo: "/root/jeonghan/repository/veilkey-v2",
+		channelID:   "ch-main",
+		mm: &MattermostConfig{
+			URL:        mmServer.URL,
+			AdminToken: "admin-token",
+			TeamName:   "prelik",
+		},
+	}
+
+	token, username := d.ensureBotForDal("dev", localdal.DalProfile{
+		Name: "dev",
+		UUID: "v2-dev-20260326",
+		Role: "member",
+	})
+
+	if token != "restored-bot-token" {
+		t.Fatalf("token = %q, want restored-bot-token", token)
+	}
+	if username != "dal-dev" {
+		t.Fatalf("username = %q, want dal-dev", username)
+	}
+	if !createdToken {
+		t.Fatal("expected bot token to be recreated")
+	}
+}
+
+func TestReconcile_RestoresMissingBotTokenFromMattermost(t *testing.T) {
+	src := readSource(t, "daemon.go")
+	if !strings.Contains(src, `if botToken == ""`) || !strings.Contains(src, `ensureBotForDal(instanceName, *dal)`) {
+		t.Fatal("reconcile must restore missing bot tokens via ensureBotForDal")
 	}
 }
 
@@ -226,14 +294,7 @@ func TestCleanupOrphanBotDMs_Exists(t *testing.T) {
 
 // ── Member → Leader reporting ────────────────────────────────
 
-
-
-
-
-
-
 // ── Bridge: GetUsername ──────────────────────────────────────
-
 
 // ── helper ───────────────────────────────────────────────────
 
@@ -251,8 +312,6 @@ func readSource(t *testing.T, relPath string) string {
 	}
 	return string(data)
 }
-
-
 
 // ── MATTERMOST_URL 환경변수 주입 ─────────────────────────
 
@@ -361,7 +420,7 @@ func TestContainer_AllFieldsPresent(t *testing.T) {
 		Workspace:   "shared",
 		Skills:      3,
 		BotToken:    "tok",
-		BotUsername:  "dal-test",
+		BotUsername: "dal-test",
 	}
 	if c.BotUsername == "" {
 		t.Fatal("BotUsername must be settable")
@@ -733,7 +792,7 @@ func TestHandlePs_WithContainers(t *testing.T) {
 
 func TestHandleStatus_ShowsAllDals(t *testing.T) {
 	d := &Daemon{
-		containers:  map[string]*Container{},
+		containers:   map[string]*Container{},
 		localdalRoot: t.TempDir(),
 	}
 	req := httptest.NewRequest("GET", "/api/status", nil)

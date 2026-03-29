@@ -19,9 +19,9 @@ import (
 
 // MattermostConfig holds Mattermost connection settings.
 type MattermostConfig struct {
-	URL       string // e.g. http://10.50.0.202:8065
+	URL        string // e.g. http://10.50.0.202:8065
 	AdminToken string // PAT with admin access
-	TeamName  string // e.g. "prelik"
+	TeamName   string // e.g. "prelik"
 }
 
 // Daemon is the dalcenter HTTP API server.
@@ -30,8 +30,8 @@ type Daemon struct {
 	localdalRoot string
 	serviceRepo  string // service repo path to mount as /workspace
 	mm           *MattermostConfig
-	apiToken     string // Bearer token for write endpoints (empty = no auth)
-	channelID    string // channel for this project
+	apiToken     string                // Bearer token for write endpoints (empty = no auth)
+	channelID    string                // channel for this project
 	containers   map[string]*Container // dal name -> container
 	mu           sync.RWMutex
 	escalations  *escalationStore
@@ -56,6 +56,13 @@ type Container struct {
 	BotToken    string `json:"-"` // Mattermost bot token
 	BotUsername string `json:"-"` // Mattermost bot @username
 }
+
+var (
+	setupBotFunc            = talk.SetupBot
+	getTeamAndChannelFunc   = talk.GetTeamAndChannel
+	findOrCreateChannelFunc = talk.FindOrCreateChannel
+	addUserToChannelFunc    = talk.AddUserToChannel
+)
 
 // New creates a daemon.
 func New(addr, localdalRoot, serviceRepo string, mm *MattermostConfig) *Daemon {
@@ -102,6 +109,46 @@ func dalContainerName(name, uuid string) string {
 // Uses a stable name (no UUID) so the bot is reused across wake cycles.
 func dalBotUsername(name, _ string) string {
 	return containerBasePrefix + name
+}
+
+func (d *Daemon) ensureBotForDal(instanceName string, dal localdal.DalProfile) (string, string) {
+	botUsername := dalBotUsername(dal.Name, dal.UUID)
+	if d.mm == nil || d.mm.URL == "" || d.channelID == "" {
+		return "", botUsername
+	}
+
+	repoName := filepath.Base(d.serviceRepo)
+	if repoName == "" || repoName == "." {
+		repoName = "dalcenter"
+	}
+
+	teamID, _, _ := getTeamAndChannelFunc(d.mm.URL, d.mm.AdminToken, d.mm.TeamName, repoName)
+	if teamID == "" {
+		log.Printf("[daemon] mattermost team/channel lookup failed for %s", instanceName)
+		return "", botUsername
+	}
+
+	bot, err := setupBotFunc(d.mm.URL, d.mm.AdminToken, teamID, d.channelID, botUsername, dal.Name, fmt.Sprintf("dal %s (%s)", dal.Name, dal.Role))
+	if err != nil {
+		log.Printf("[daemon] mattermost bot setup for %s: %v (continuing without)", instanceName, err)
+		return "", botUsername
+	}
+	botUserID := bot.UserID
+	if len(botUserID) > 8 {
+		botUserID = botUserID[:8]
+	}
+	log.Printf("[daemon] mattermost bot: %s (user=%s)", botUsername, botUserID)
+
+	if dal.Role == "leader" {
+		leadersChName := "dal-leaders"
+		if leadersChID, err := findOrCreateChannelFunc(d.mm.URL, d.mm.AdminToken, teamID, leadersChName); err == nil {
+			if err := addUserToChannelFunc(d.mm.URL, d.mm.AdminToken, leadersChID, bot.UserID); err == nil {
+				log.Printf("[daemon] leader %s joined dal-leaders channel", botUsername)
+			}
+		}
+	}
+
+	return bot.Token, botUsername
 }
 
 // requireAuth is middleware that checks Bearer token for write endpoints.
@@ -384,34 +431,12 @@ func (d *Daemon) handleWake(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Setup Mattermost bot for this dal
-	var botToken string
-	if d.mm != nil && d.mm.URL != "" && d.channelID != "" {
-		botUsername := dalBotUsername(dal.Name, dal.UUID)
-		teamID, _, _ := talk.GetTeamAndChannel(d.mm.URL, d.mm.AdminToken, d.mm.TeamName, filepath.Base(d.serviceRepo))
-		bot, err := talk.SetupBot(d.mm.URL, d.mm.AdminToken, teamID, d.channelID, botUsername, dal.Name, fmt.Sprintf("dal %s (%s)", dal.Name, dal.Role))
-		if err != nil {
-			log.Printf("[daemon] mattermost bot setup for %s: %v (continuing without)", name, err)
-		} else {
-			botToken = bot.Token
-			log.Printf("[daemon] mattermost bot: %s (user=%s)", botUsername, bot.UserID[:8])
-
-			// Leader → dal-leaders 공유 채널에도 자동 참여 (cross-project 소통)
-			if dal.Role == "leader" {
-				leadersChName := "dal-leaders"
-				if leadersChID, err := talk.FindOrCreateChannel(d.mm.URL, d.mm.AdminToken, teamID, leadersChName); err == nil {
-					if err := talk.AddUserToChannel(d.mm.URL, d.mm.AdminToken, leadersChID, bot.UserID); err == nil {
-						log.Printf("[daemon] leader %s joined dal-leaders channel", botUsername)
-					}
-				}
-			}
-		}
-	}
+	botToken, botUser := d.ensureBotForDal(instanceName, *dal)
 
 	ws := dal.Workspace
 	if ws == "" {
 		ws = "shared"
 	}
-	botUser := dalBotUsername(dal.Name, dal.UUID)
 	d.mu.Lock()
 	d.containers[instanceName] = &Container{
 		DalName:     instanceName,
@@ -423,7 +448,7 @@ func (d *Daemon) handleWake(w http.ResponseWriter, r *http.Request) {
 		Workspace:   ws,
 		Skills:      len(dal.Skills),
 		BotToken:    botToken,
-		BotUsername:  botUser,
+		BotUsername: botUser,
 	}
 	d.mu.Unlock()
 
@@ -807,6 +832,22 @@ func (d *Daemon) reconcile() {
 			if entry != nil {
 				botToken = entry.BotToken
 			}
+			botUser := dalBotUsername(dal.Name, dal.UUID)
+			if botToken == "" {
+				recoveredToken, recoveredUser := d.ensureBotForDal(instanceName, *dal)
+				if recoveredToken != "" {
+					botToken = recoveredToken
+					botUser = recoveredUser
+					d.registry.Set(dal.UUID, RegistryEntry{
+						Name:        instanceName,
+						Repo:        d.serviceRepo,
+						ContainerID: c.ID,
+						BotToken:    botToken,
+						Status:      "running",
+					})
+					log.Printf("[daemon] reconcile: restored bot token for %s", instanceName)
+				}
+			}
 
 			d.mu.Lock()
 			d.containers[instanceName] = &Container{
@@ -818,6 +859,7 @@ func (d *Daemon) reconcile() {
 				Status:      "running",
 				Skills:      len(dal.Skills),
 				BotToken:    botToken,
+				BotUsername: botUser,
 			}
 			d.mu.Unlock()
 			running++
