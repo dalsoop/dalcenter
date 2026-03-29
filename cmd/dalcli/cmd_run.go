@@ -26,6 +26,7 @@ import (
 type agentConfig struct {
 	DalName     string `json:"dal_name"`
 	BotToken    string `json:"bot_token"`
+	BotUsername string `json:"bot_username"`
 	ChannelID   string `json:"channel_id"`
 	MMURL       string `json:"mm_url"`
 	TeamMembers string `json:"team_members"`
@@ -528,7 +529,11 @@ func runAgentLoop(dalName string) error {
 	log.Printf("[agent] listening...")
 
 	uuidShort := os.Getenv("DAL_UUID_SHORT")
-	mention := fmt.Sprintf("@dal-%s", dalName)
+	stableMention := fmt.Sprintf("@dal-%s", dalName)
+	mention := stableMention
+	if cfg.BotUsername != "" {
+		mention = "@" + cfg.BotUsername
+	}
 	var legacyMention string
 	if uuidShort != "" {
 		legacyMention = fmt.Sprintf("@dal-%s-%s", dalName, uuidShort)
@@ -602,7 +607,7 @@ func runAgentLoop(dalName string) error {
 			continue
 		}
 
-		isDirectMention := containsAnyMention(msg.Content, mention, legacyMention, altMention)
+		isDirectMention := containsAnyMention(msg.Content, mention, stableMention, legacyMention, altMention)
 		isThreadReply := msg.RootID != "" && isActiveThread(&activeThreads, msg.RootID)
 		isDM := msg.Channel != "" && msg.Channel != cfg.ChannelID // DM = different channel than main
 
@@ -617,7 +622,7 @@ func runAgentLoop(dalName string) error {
 			log.Printf("[agent] skipped operational dal-bot message: %s", truncate(msg.Content, 60))
 			continue
 		}
-		if isDM && isDirectedAtDifferentDal(msg.Content, mention, legacyMention, altMention) {
+		if isDM && isDirectedAtDifferentDal(msg.Content, mention, stableMention, legacyMention, altMention) {
 			log.Printf("[agent] skipped DM for different dal: %s", truncate(msg.Content, 60))
 			continue
 		}
@@ -641,7 +646,7 @@ func runAgentLoop(dalName string) error {
 		task := extractTask(msg.Content, "작업 지시:")
 		if task == "" && isDirectMention {
 			// Free-form: strip mention, use entire message
-			task = stripMentions(msg.Content, mention, legacyMention, altMention)
+			task = stripMentions(msg.Content, mention, stableMention, legacyMention, altMention)
 		}
 		if task == "" && isThreadReply {
 			task = msg.Content

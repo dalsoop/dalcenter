@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -103,10 +105,65 @@ func dalContainerName(name, uuid string) string {
 	return containerBasePrefix + name + "-" + uuidShort(uuid)
 }
 
-// dalBotUsername returns the MM bot username: dal-{name}
-// Uses a stable name (no UUID) so the bot is reused across wake cycles.
-func dalBotUsername(name, _ string) string {
-	return containerBasePrefix + name
+const (
+	mattermostBotUsernameMaxLen = 22
+	mattermostBotRepoHashLen    = 4
+)
+
+// dalBotUsername returns a repo-namespaced MM bot username.
+// Format: dal-{name}-{repoNs}, kept within Mattermost's username length limit.
+func dalBotUsername(serviceRepo, name, _ string) string {
+	namePart := sanitizeMMUsernamePart(name)
+	if namePart == "" {
+		namePart = "bot"
+	}
+
+	maxNameLen := mattermostBotUsernameMaxLen - len(containerBasePrefix) - 1 - mattermostBotRepoHashLen
+	if maxNameLen < 1 {
+		maxNameLen = 1
+	}
+	if len(namePart) > maxNameLen {
+		namePart = namePart[:maxNameLen]
+	}
+
+	repoPart := repoBotNamespace(serviceRepo, mattermostBotUsernameMaxLen-len(containerBasePrefix)-len(namePart)-1)
+	return containerBasePrefix + namePart + "-" + repoPart
+}
+
+func repoBotNamespace(serviceRepo string, maxLen int) string {
+	if maxLen < 1 {
+		return "x"
+	}
+	baseName := filepath.Base(serviceRepo)
+	if baseName == "" || baseName == "." {
+		baseName = "repo"
+	}
+	clean := sanitizeMMUsernamePart(baseName)
+	if clean == "" {
+		clean = "repo"
+	}
+	absPath, _ := filepath.Abs(serviceRepo)
+	sum := sha256.Sum256([]byte(absPath))
+	hash := hex.EncodeToString(sum[:])[:mattermostBotRepoHashLen]
+	if maxLen <= len(hash) {
+		return hash[:maxLen]
+	}
+	prefixLen := maxLen - len(hash)
+	if len(clean) > prefixLen {
+		clean = clean[:prefixLen]
+	}
+	return clean + hash
+}
+
+func sanitizeMMUsernamePart(raw string) string {
+	var b strings.Builder
+	b.Grow(len(raw))
+	for _, r := range strings.ToLower(raw) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // requireAuth is middleware that checks Bearer token for write endpoints.
@@ -404,7 +461,7 @@ func (d *Daemon) handleWake(w http.ResponseWriter, r *http.Request) {
 	// Setup Mattermost bot for this dal
 	var botToken string
 	if d.mm != nil && d.mm.URL != "" && d.channelID != "" {
-		botUsername := dalBotUsername(dal.Name, dal.UUID)
+		botUsername := dalBotUsername(d.serviceRepo, dal.Name, dal.UUID)
 		teamID, _, _ := talk.GetTeamAndChannel(d.mm.URL, d.mm.AdminToken, d.mm.TeamName, filepath.Base(d.serviceRepo))
 		bot, err := talk.SetupBot(d.mm.URL, d.mm.AdminToken, teamID, d.channelID, botUsername, dal.Name, fmt.Sprintf("dal %s (%s)", dal.Name, dal.Role))
 		if err != nil {
@@ -429,7 +486,7 @@ func (d *Daemon) handleWake(w http.ResponseWriter, r *http.Request) {
 	if ws == "" {
 		ws = "shared"
 	}
-	botUser := dalBotUsername(dal.Name, dal.UUID)
+	botUser := dalBotUsername(d.serviceRepo, dal.Name, dal.UUID)
 	d.mu.Lock()
 	d.containers[instanceName] = &Container{
 		DalName:     instanceName,
@@ -899,7 +956,7 @@ func (d *Daemon) handleMessage(w http.ResponseWriter, r *http.Request) {
 				if c.BotUsername != "" {
 					mention += c.BotUsername
 				} else {
-					mention += dalBotUsername(c.DalName, c.UUID)
+					mention += dalBotUsername(d.serviceRepo, c.DalName, c.UUID)
 				}
 				legacyMention := fmt.Sprintf("@dal-%s-%s", c.DalName, uuidShort(c.UUID))
 				altMention := "@" + c.DalName
@@ -1079,10 +1136,11 @@ func (d *Daemon) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]string{
-		"dal_name":   c.DalName,
-		"uuid":       c.UUID,
-		"bot_token":  c.BotToken,
-		"channel_id": d.channelID,
+		"dal_name":     c.DalName,
+		"uuid":         c.UUID,
+		"bot_token":    c.BotToken,
+		"bot_username": c.BotUsername,
+		"channel_id":   d.channelID,
 	}
 	if d.mm != nil {
 		resp["mm_url"] = d.mm.URL

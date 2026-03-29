@@ -10,8 +10,9 @@ func TestHandleAgentConfig_Found(t *testing.T) {
 	d := &Daemon{
 		containers: map[string]*Container{
 			"story-checker": {
-				DalName:  "story-checker",
-				BotToken: "bot-tok-123",
+				DalName:     "story-checker",
+				BotToken:    "bot-tok-123",
+				BotUsername: "dal-storychecker-abcd",
 			},
 		},
 		channelID: "ch-abc",
@@ -36,6 +37,9 @@ func TestHandleAgentConfig_Found(t *testing.T) {
 	}
 	if resp["bot_token"] != "bot-tok-123" {
 		t.Errorf("bot_token = %q", resp["bot_token"])
+	}
+	if resp["bot_username"] != "dal-storychecker-abcd" {
+		t.Errorf("bot_username = %q", resp["bot_username"])
 	}
 	if resp["channel_id"] != "ch-abc" {
 		t.Errorf("channel_id = %q", resp["channel_id"])
