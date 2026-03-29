@@ -63,6 +63,33 @@ func shouldDisableDM(raw string) bool {
 	return false
 }
 
+func startTrackedRun(dalName, task string) string {
+	client, err := dalcenterClientOrFallback()
+	if err != nil {
+		return ""
+	}
+	result, err := client.StartTaskRun(dalName, truncate(task, 1000))
+	if err != nil {
+		log.Printf("[agent] task run start failed: %v", err)
+		return ""
+	}
+	return result.ID
+}
+
+func finishTrackedRun(taskID, status, output, errMsg string) {
+	if taskID == "" {
+		return
+	}
+	client, err := dalcenterClientOrFallback()
+	if err != nil {
+		log.Printf("[agent] task run finish skipped for %s: %v", taskID, err)
+		return
+	}
+	if _, err := client.FinishTaskRun(taskID, status, output, errMsg); err != nil {
+		log.Printf("[agent] task run finish failed for %s: %v", taskID, err)
+	}
+}
+
 func dalcenterClientOrFallback() (*daemon.Client, error) {
 	if client, err := daemon.NewClient(); err == nil {
 		return client, nil
@@ -289,9 +316,13 @@ func runAgentLoop(dalName string) error {
 		}
 
 		externalURL := os.Getenv("DALCENTER_EXTERNAL_URL")
+		taskRunID := startTrackedRun(dalName, spec.UserTask)
 		var statusMsg string
-		if externalURL != "" {
-			logsURL := fmt.Sprintf("%s/api/logs/%s", externalURL, dalName)
+		if externalURL != "" && taskRunID != "" {
+			runURL := fmt.Sprintf("%s/runs/%s", strings.TrimRight(externalURL, "/"), taskRunID)
+			statusMsg = fmt.Sprintf("💬 작업 중... ([실행 보기](%s))", runURL)
+		} else if externalURL != "" {
+			logsURL := fmt.Sprintf("%s/api/logs/%s", strings.TrimRight(externalURL, "/"), dalName)
 			statusMsg = fmt.Sprintf("💬 작업 중... ([로그](%s))", logsURL)
 		} else {
 			statusMsg = "💬 작업 중..."
@@ -325,6 +356,7 @@ func runAgentLoop(dalName string) error {
 				if class == ErrClassEnv || class == ErrClassDeps {
 					result.State = TaskStateBlocked
 				}
+				finishTrackedRun(taskRunID, string(result.State), truncate(output, 12000), err.Error())
 				mm.Send(bridge.Message{
 					Content: fmt.Sprintf("❌ 실패 (%s): %v\n```\n%s\n```", class, err, truncate(output, 500)),
 					Channel: spec.Channel,
@@ -374,6 +406,7 @@ func runAgentLoop(dalName string) error {
 		if gitResult != "" {
 			response += "\n\n" + gitResult
 		}
+		finishTrackedRun(taskRunID, string(result.State), truncate(response, 12000), "")
 
 		mm.Send(bridge.Message{
 			Content: response,

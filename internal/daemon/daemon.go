@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"io"
 	"log"
 	"net/http"
@@ -226,6 +227,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	mux.HandleFunc("GET /api/status/{name}", d.handleStatusOne)
 	mux.HandleFunc("POST /api/validate", d.handleValidate)
 	mux.HandleFunc("GET /api/logs/{name}", d.handleLogs)
+	mux.HandleFunc("GET /runs/{id}", d.handleRunPage)
 	// Write endpoints — require auth when DALCENTER_TOKEN is set
 	mux.HandleFunc("POST /api/wake/{name}", d.requireAuth(d.handleWake))
 	mux.HandleFunc("POST /api/sleep/{name}", d.requireAuth(d.handleSleep))
@@ -235,7 +237,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	mux.HandleFunc("GET /api/agent-config/{name}", d.handleAgentConfig)
 	// Direct task execution (works without Mattermost)
 	mux.HandleFunc("POST /api/task", d.requireAuth(d.handleTask))
+	mux.HandleFunc("POST /api/task/start", d.requireAuth(d.handleTaskStart))
 	mux.HandleFunc("GET /api/task/{id}", d.handleTaskStatus)
+	mux.HandleFunc("POST /api/task/{id}/finish", d.requireAuth(d.handleTaskFinish))
 	mux.HandleFunc("GET /api/tasks", d.handleTaskList)
 	// Claims — dal feedback to host
 	mux.HandleFunc("POST /api/claim", d.handleClaim)
@@ -650,6 +654,95 @@ func (d *Daemon) handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain")
 	w.Write([]byte(logs))
+}
+
+func (d *Daemon) handleRunPage(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	tr := d.tasks.Get(id)
+	if tr == nil {
+		http.Error(w, "task not found", http.StatusNotFound)
+		return
+	}
+
+	const page = `<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>dalcenter run {{.ID}}</title>
+  <style>
+    :root { color-scheme: light; --bg:#f6f4ed; --panel:#fffdf7; --ink:#1a1a1a; --muted:#6b675d; --line:#d9d1bd; --accent:#0f766e; --warn:#b45309; --fail:#b91c1c; }
+    body { margin:0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background:linear-gradient(180deg,#f3efe2,#f9f8f3); color:var(--ink); }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 28px 20px 40px; }
+    .hero { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; margin-bottom:20px; }
+    .title { font-size: 28px; font-weight: 700; letter-spacing: -0.02em; }
+    .meta { color: var(--muted); font-size: 13px; margin-top: 8px; }
+    .badge { display:inline-block; padding: 4px 10px; border-radius: 999px; border:1px solid var(--line); background:var(--panel); font-size:12px; }
+    .badge.running { color: var(--accent); border-color: #8fd4ce; }
+    .badge.done { color: var(--accent); border-color: #8fd4ce; }
+    .badge.failed { color: var(--fail); border-color: #f0a7a7; }
+    .badge.blocked { color: var(--warn); border-color: #efc17e; }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:16px; margin-bottom:16px; box-shadow:0 6px 24px rgba(44,31,0,.06); }
+    .label { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin-bottom:8px; }
+    pre { margin:0; white-space:pre-wrap; word-break:break-word; font:inherit; line-height:1.5; }
+    a { color:#0b4f6c; text-decoration:none; }
+    a:hover { text-decoration:underline; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hero">
+      <div>
+        <div class="title">run {{.ID}}</div>
+        <div class="meta">dal <strong>{{.Dal}}</strong> · started <span id="startedAt">{{.StartedAt}}</span></div>
+      </div>
+      <div class="badge {{.Status}}" id="status">{{.Status}}</div>
+    </div>
+
+    <div class="card">
+      <div class="label">Task</div>
+      <pre id="task">{{.Task}}</pre>
+    </div>
+
+    <div class="card">
+      <div class="label">Output</div>
+      <pre id="output">{{.Output}}</pre>
+    </div>
+
+    <div class="card">
+      <div class="label">Error</div>
+      <pre id="error">{{.Error}}</pre>
+    </div>
+
+    <div class="card">
+      <div class="label">Links</div>
+      <a id="logsLink" href="/api/logs/{{.Dal}}" target="_blank" rel="noreferrer">dal logs</a>
+    </div>
+  </div>
+
+  <script>
+    const taskId = "{{.ID}}";
+    const terminal = new Set(["done","failed","blocked","noop"]);
+    async function refresh() {
+      const res = await fetch("/api/task/" + taskId, {headers: {"Accept":"application/json"}});
+      if (!res.ok) return;
+      const data = await res.json();
+      document.getElementById("status").textContent = data.status || "";
+      document.getElementById("status").className = "badge " + (data.status || "");
+      document.getElementById("task").textContent = data.task || "";
+      document.getElementById("output").textContent = data.output || "";
+      document.getElementById("error").textContent = data.error || "";
+      if (data.started_at) document.getElementById("startedAt").textContent = data.started_at;
+      if (!terminal.has(data.status)) window.setTimeout(refresh, 2000);
+    }
+    window.setTimeout(refresh, 1500);
+  </script>
+</body>
+</html>`
+
+	tpl := template.Must(template.New("run").Parse(page))
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = tpl.Execute(w, tr)
 }
 
 func (d *Daemon) handleMessage(w http.ResponseWriter, r *http.Request) {
