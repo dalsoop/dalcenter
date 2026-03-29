@@ -701,13 +701,15 @@ func executeTask(task string) (string, error) {
 	fallbackPlayer := detectFallback(player)
 
 	// Check centralized provider circuit first (dalcenter daemon level)
-	if centralPlayer := fetchCentralProvider(); centralPlayer != "" && centralPlayer != player {
+	if centralPlayer := fetchCentralProvider(); shouldUseCentralOverride(player, fallbackPlayer, centralPlayer) {
 		log.Printf("[central-circuit] using %s (central override)", centralPlayer)
 		out, err := runProvider(centralPlayer, task)
 		if err == nil {
 			return out, nil
 		}
 		log.Printf("[central-circuit] %s failed: %v, falling through to local circuit", centralPlayer, err)
+	} else if centralPlayer != "" && centralPlayer != player {
+		log.Printf("[central-circuit] ignoring active provider %s for primary %s (fallback=%s)", centralPlayer, player, fallbackPlayer)
 	}
 
 	// Local circuit breaker fallback
@@ -774,6 +776,13 @@ func executeTask(task string) (string, error) {
 	}
 
 	return lastOut, fmt.Errorf("max retries (%d) exceeded, circuit=%s: %w", maxRetries, providerCircuit.State(), lastErr)
+}
+
+func shouldUseCentralOverride(player, fallbackPlayer, centralPlayer string) bool {
+	if centralPlayer == "" || centralPlayer == player {
+		return false
+	}
+	return fallbackPlayer != "" && centralPlayer == fallbackPlayer
 }
 
 // detectFallback returns the fallback player for the given primary.

@@ -334,6 +334,31 @@ func TestShouldIgnoreDalBotMessage(t *testing.T) {
 	}
 }
 
+func TestShouldUseCentralOverride(t *testing.T) {
+	tests := []struct {
+		name           string
+		player         string
+		fallbackPlayer string
+		centralPlayer  string
+		want           bool
+	}{
+		{"no central", "claude", "codex", "", false},
+		{"same as primary", "claude", "codex", "claude", false},
+		{"matches fallback", "claude", "codex", "codex", true},
+		{"codex should ignore claude", "codex", "", "claude", false},
+		{"unexpected provider ignored", "claude", "codex", "gemini", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldUseCentralOverride(tt.player, tt.fallbackPlayer, tt.centralPlayer)
+			if got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 // ── fetchAgentConfig ──
 
 func TestFetchAgentConfig_Success(t *testing.T) {
