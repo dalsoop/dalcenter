@@ -25,7 +25,6 @@ RUN git config --global credential.helper '!f() { echo username=x-access-token; 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 
 # Quorum — multi-agent consensus & orchestration
-RUN npm install -g quorum-audit
 
 # CCW — JSON-driven multi-agent workflow orchestration
 RUN npm install -g claude-code-workflow && ccw install -m Global || true

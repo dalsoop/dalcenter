@@ -660,8 +660,6 @@ func setupWorkspace(containerID string, dal *localdal.DalProfile, issueID string
 	}
 
 	// 4. Quorum setup (if available)
-	quorumSetup := exec.Command("docker", "exec", "-w", "/workspace", containerID, "bash", "-c", "command -v quorum && quorum setup 2>/dev/null || true")
-	quorumSetup.Run()
 
 	return warnings
 }

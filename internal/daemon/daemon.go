@@ -369,7 +369,7 @@ func (d *Daemon) handleWake(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Setup workspace: branch checkout + dependency install + quorum setup
+	// Setup workspace: branch checkout + dependency install
 	if setupWarnings := setupWorkspace(containerID, dal, issueID); len(setupWarnings) > 0 {
 		warnings = append(warnings, setupWarnings...)
 	}
@@ -469,7 +469,7 @@ func (d *Daemon) handleRestart(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleReplace creates fresh replacement containers for a dal.
-// Used when quorum stagnation detection triggers a dal rotation.
+// Used when stagnation detection triggers a dal rotation.
 // Creates 2 new instances from template, then sleeps the original.
 func (d *Daemon) handleReplace(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
