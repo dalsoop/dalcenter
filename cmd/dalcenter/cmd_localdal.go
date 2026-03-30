@@ -26,20 +26,19 @@ func localdalRoot() string {
 // --- serve ---
 
 func newServeCmd() *cobra.Command {
-	var addr, serviceRepo, bridgeURL string
+	var addr, serviceRepo, bridgeURL, bridgeConf string
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run dalcenter daemon (HTTP API + Docker management)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			root := localdalRoot()
-			// --repo가 지정되면 해당 레포의 .dal/ 사용 (cwd 의존 제거)
 			if serviceRepo != "" {
 				repoRoot := filepath.Join(serviceRepo, ".dal")
 				if _, err := os.Stat(repoRoot); err == nil {
 					root = repoRoot
 				}
 			}
-			d := daemon.New(addr, root, serviceRepo, bridgeURL)
+			d := daemon.New(addr, root, serviceRepo, bridgeURL, bridgeConf)
 
 			ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer cancel()
@@ -47,9 +46,10 @@ func newServeCmd() *cobra.Command {
 			return d.Run(ctx)
 		},
 	}
-	cmd.Flags().StringVar(&addr, "addr", ":11190", "Listen address")
-	cmd.Flags().StringVar(&serviceRepo, "repo", "", "Service repository path to mount as /workspace")
-	cmd.Flags().StringVar(&bridgeURL, "bridge-url", envOrDefault("DALCENTER_BRIDGE_URL", "http://localhost:4242"), "Matterbridge API URL")
+	cmd.Flags().StringVar(&addr, "addr", envOrDefault("DALCENTER_ADDR", daemon.DefaultAddr), "Listen address")
+	cmd.Flags().StringVar(&serviceRepo, "repo", os.Getenv("DALCENTER_REPO"), "Service repository path")
+	cmd.Flags().StringVar(&bridgeURL, "bridge-url", os.Getenv("DALCENTER_BRIDGE_URL"), "Matterbridge API URL (auto-set if --bridge-conf provided)")
+	cmd.Flags().StringVar(&bridgeConf, "bridge-conf", os.Getenv("DALCENTER_BRIDGE_CONF"), "Matterbridge config path (starts as child process)")
 	return cmd
 }
 

@@ -193,7 +193,7 @@ func postCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			bridgeURL := os.Getenv("DALCENTER_BRIDGE_URL")
 			if bridgeURL == "" {
-				bridgeURL = "http://localhost:4242"
+				bridgeURL = "http://localhost:" + os.Getenv("DAL_BRIDGE_PORT")
 			}
 			dalName := os.Getenv("DAL_NAME")
 			gateway := os.Getenv("DAL_GATEWAY")

@@ -17,12 +17,22 @@ import (
 	"github.com/dalsoop/dalcenter/internal/localdal"
 )
 
+const (
+	// DefaultAddr is the default listen address for the dalcenter daemon.
+	DefaultAddr = ":11190"
+	// DefaultBridgePort is the default matterbridge API port.
+	DefaultBridgePort = "4242"
+	// DefaultBridgeURL is the default matterbridge API URL.
+	DefaultBridgeURL = "http://localhost:" + DefaultBridgePort
+)
+
 // Daemon is the dalcenter HTTP API server.
 type Daemon struct {
 	addr         string
 	localdalRoot string
 	serviceRepo  string // service repo path to mount as /workspace
 	bridgeURL    string // matterbridge API URL
+	bridgeConf   string // matterbridge config path (child process)
 	apiToken     string                // Bearer token for write endpoints (empty = no auth)
 	containers   map[string]*Container // dal name -> container
 	mu           sync.RWMutex
@@ -53,7 +63,7 @@ type Container struct {
 }
 
 // New creates a daemon.
-func New(addr, localdalRoot, serviceRepo, bridgeURL string) *Daemon {
+func New(addr, localdalRoot, serviceRepo, bridgeURL, bridgeConf string) *Daemon {
 	token := os.Getenv("DALCENTER_TOKEN")
 	if token != "" {
 		log.Println("[daemon] API token auth enabled for write endpoints")
@@ -66,6 +76,7 @@ func New(addr, localdalRoot, serviceRepo, bridgeURL string) *Daemon {
 		localdalRoot: localdalRoot,
 		serviceRepo:  serviceRepo,
 		bridgeURL:    strings.TrimRight(bridgeURL, "/"),
+		bridgeConf:   bridgeConf,
 		apiToken:     token,
 		containers:   make(map[string]*Container),
 		escalations:  newEscalationStoreWithFile(filepath.Join(dataDir(serviceRepo), "escalations.json")),
@@ -124,6 +135,22 @@ func (d *Daemon) Run(ctx context.Context) error {
 			ss.Process.Kill()
 			ss.Wait()
 		}()
+	}
+
+	// Start matterbridge as child process
+	if d.bridgeConf != "" {
+		if mb, err := startMatterbridge(ctx, d.bridgeConf); err != nil {
+			log.Printf("[daemon] matterbridge start failed: %v (continuing without)", err)
+		} else if mb != nil {
+			defer func() {
+				mb.Process.Kill()
+				mb.Wait()
+			}()
+			// Auto-set bridgeURL if not explicitly provided
+			if d.bridgeURL == "" {
+				d.bridgeURL = DefaultBridgeURL
+			}
+		}
 	}
 
 	// Start credential watcher

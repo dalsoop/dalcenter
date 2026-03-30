@@ -81,7 +81,7 @@ func newRegisterCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&bridgeURL, "bridge-url", envOrDefault("DALCENTER_BRIDGE_URL", "http://localhost:4242"), "Matterbridge API URL")
+	cmd.Flags().StringVar(&bridgeURL, "bridge-url", envOrDefault("DALCENTER_BRIDGE_URL", daemon.DefaultBridgeURL), "Matterbridge API URL")
 	cmd.Flags().IntVar(&port, "port", 0, "Listen port (default: auto-assign next available)")
 	return cmd
 }
