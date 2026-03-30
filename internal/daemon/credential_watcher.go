@@ -134,7 +134,7 @@ func pullCredentialsFromGit(credPaths map[string]string) {
 		return
 	}
 
-	out, err := exec.Command("git", "-C", repoDir, "pull", "--ff-only", "--quiet").CombinedOutput()
+	out, err := exec.Command("git", "-C", repoDir, "pull", "origin", "main", "--ff-only", "--quiet").CombinedOutput()
 	if err != nil {
 		log.Printf("[cred-watcher] git pull failed: %v %s", err, strings.TrimSpace(string(out)))
 		return
