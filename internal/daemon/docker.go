@@ -274,7 +274,7 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr, bridgeURL st
 	})
 
 	// Mount service repo as workspace (shared mode) or leave empty for clone mode
-	isCloneMode := dal.Workspace == "clone"
+	isCloneMode := dal.Workspace == "clone" || dal.Role == "member"
 	if serviceRepo != "" && !isCloneMode {
 		bindMounts = append(bindMounts, mount.Mount{
 			Type:   mount.TypeBind,
