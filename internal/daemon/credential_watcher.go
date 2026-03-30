@@ -145,6 +145,12 @@ func pullCredentialsFromGit(credPaths map[string]string) {
 		"codex":  filepath.Join(repoDir, "codex", "auth.json"),
 	}
 
+	applyGitCredentials(gitFiles, credPaths)
+}
+
+// applyGitCredentials copies credential files from git repo to active paths
+// when the git version is newer (by mtime).
+func applyGitCredentials(gitFiles, credPaths map[string]string) {
 	for player, gitPath := range gitFiles {
 		activePath, ok := credPaths[player]
 		if !ok {
@@ -160,8 +166,6 @@ func pullCredentialsFromGit(credPaths map[string]string) {
 			if err != nil || len(data) < 10 {
 				continue
 			}
-			// Use WriteFile to update content while preserving path.
-			// Bind mounts share the inode, so in-place write is needed.
 			if err := os.WriteFile(activePath, data, 0600); err != nil {
 				log.Printf("[cred-watcher] failed to update %s credential from git: %v", player, err)
 				continue
