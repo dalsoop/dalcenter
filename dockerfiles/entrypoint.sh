@@ -6,6 +6,12 @@
 
 set -e
 
+# Restore settings.json if missing (may be overwritten by volume mounts)
+if [ -f /etc/dal/settings.json.default ] && [ ! -f /root/.claude/settings.json ]; then
+    cp /etc/dal/settings.json.default /root/.claude/settings.json
+    echo "[entrypoint] restored settings.json from default"
+fi
+
 # Wait for dalcli binary (injected by dalcenter after docker run)
 MAX_WAIT=30
 for i in $(seq 1 $MAX_WAIT); do

@@ -1,5 +1,7 @@
 FROM ubuntu:24.04
 
+WORKDIR /root
+
 RUN apt-get update -qq && \
     apt-get install -y -qq --no-install-recommends \
       bash git curl ca-certificates gpg wget build-essential && \
@@ -25,10 +27,11 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | g
     apt-get update -qq && apt-get install -y -qq gh && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /root/.claude/skills /root/.claude/hooks
+RUN mkdir -p .claude/skills .claude/hooks /etc/dal
 
 # Auto-approve all tools for autonomous dal operation
-RUN echo '{"permissions":{"allow":["Bash(*)","Read(*)","Write(*)","Edit(*)","Glob(*)","Grep(*)","Agent(*)","Task(*)"],"deny":[],"defaultMode":"dontAsk"},"skipDangerousModePermissionPrompt":true,"skipWorkspaceTrustPrompt":true}' > /root/.claude/settings.json
+COPY settings.json .claude/settings.json
+COPY settings.json /etc/dal/settings.json.default
 
 # Git credential helper
 RUN git config --global credential.helper '!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f'
@@ -39,6 +42,4 @@ ENV DAL_ROLE=member
 ENV DAL_PLAYER=claude
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-
-WORKDIR /root
 CMD ["/usr/local/bin/entrypoint.sh"]
