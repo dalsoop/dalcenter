@@ -946,7 +946,9 @@ func (d *Daemon) handleMessage(w http.ResponseWriter, r *http.Request) {
 		dalName = "dalcenter"
 	}
 	// Post directly to MM (not via matterbridge) to avoid self-skip
+	log.Printf("[message] attempting mmPost for: %s", truncateStr(req.Message, 60))
 	if err := d.mmPost(req.Message); err != nil {
+		log.Printf("[message] mmPost failed: %v, falling back to bridge", err)
 		// Fallback to bridge
 		if err2 := d.bridgePost(req.Message, dalName); err2 != nil {
 			http.Error(w, fmt.Sprintf("post failed: mm=%v bridge=%v", err, err2), 500)
