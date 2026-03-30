@@ -165,7 +165,7 @@ func TestHandleSleepNotAwake(t *testing.T) {
 	}
 }
 
-func TestHandleMessageNoMattermost(t *testing.T) {
+func TestHandleMessageNoBridge(t *testing.T) {
 	d, _ := setupTestDaemon(t)
 
 	body := `{"from":"dev","message":"hello"}`
@@ -174,7 +174,7 @@ func TestHandleMessageNoMattermost(t *testing.T) {
 	d.handleMessage(w, req)
 
 	if w.Code != 503 {
-		t.Fatalf("expected 503 (no mattermost), got %d", w.Code)
+		t.Fatalf("expected 503 (no bridge), got %d", w.Code)
 	}
 }
 

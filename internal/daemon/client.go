@@ -471,32 +471,6 @@ func (c *Client) UpdateTaskRun(id string, update TaskMetadataUpdate) (*TaskResul
 	return &result, nil
 }
 
-// RefreshAgentToken asks the daemon to recreate a dal bot token and returns the fresh config.
-func (c *Client) RefreshAgentToken(name string) (map[string]string, error) {
-	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/agent-config/"+name+"/refresh-token", nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if c.apiToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiToken)
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("daemon unreachable: %w", err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("refresh agent token failed: %s", strings.TrimSpace(string(body)))
-	}
-	var result map[string]string
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("json unmarshal: %w", err)
-	}
-	return result, nil
-}
-
 // Feedback submits a task result for persistent tracking.
 func (c *Client) Feedback(dal, taskID, task, result, errMsg string, gitChanges int, durationMs int64) (*Feedback, error) {
 	body := fmt.Sprintf(`{"dal":%q,"task_id":%q,"task":%q,"result":%q,"error":%q,"git_changes":%d,"duration_ms":%d}`,

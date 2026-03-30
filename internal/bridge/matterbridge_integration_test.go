@@ -25,7 +25,7 @@ func TestMatterbridgeIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Send failed: %v", err)
 	}
-	fmt.Println("✅ Send 성공 — Mattermost town-square에 메시지 도착 확인")
+	fmt.Println("✅ Send 성공 — matterbridge 메시지 전송 확인")
 
 	// 3. Listen (5초간 수신 대기)
 	fmt.Println("⏳ Listen 대기 (5초)...")
