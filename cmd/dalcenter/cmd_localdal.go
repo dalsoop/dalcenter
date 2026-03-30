@@ -72,6 +72,9 @@ func newInitCmd() *cobra.Command {
 		Short: "Initialize a localdal repository",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			root := localdalRoot()
+			if repoPath != "" {
+				root = filepath.Join(repoPath, ".dal")
+			}
 			if err := localdal.Init(root); err != nil {
 				return err
 			}
