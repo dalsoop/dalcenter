@@ -21,17 +21,8 @@ func TestDataRootDir_EnvOverride(t *testing.T) {
 
 func TestStateBaseDir_DerivedFromDataDir(t *testing.T) {
 	t.Setenv("DALCENTER_DATA_DIR", "/opt/dal")
-	t.Setenv("DALCENTER_STATE_DIR", "")
 	if got := StateBaseDir(); got != "/opt/dal/state" {
 		t.Fatalf("StateBaseDir() = %q, want /opt/dal/state", got)
-	}
-}
-
-func TestStateBaseDir_ExplicitOverride(t *testing.T) {
-	t.Setenv("DALCENTER_DATA_DIR", "/opt/dal")
-	t.Setenv("DALCENTER_STATE_DIR", "/custom/state")
-	if got := StateBaseDir(); got != "/custom/state" {
-		t.Fatalf("StateBaseDir() = %q, want /custom/state", got)
 	}
 }
 

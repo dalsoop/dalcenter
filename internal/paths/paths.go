@@ -26,12 +26,7 @@ func DataRootDir() string {
 }
 
 // StateBaseDir returns the base directory for git-external state.
-// DALCENTER_STATE_DIR takes precedence if set (backward compatibility).
-// Otherwise falls back to $DALCENTER_DATA_DIR/state.
 func StateBaseDir() string {
-	if d := os.Getenv("DALCENTER_STATE_DIR"); d != "" {
-		return d
-	}
 	return filepath.Join(DataRootDir(), "state")
 }
 
