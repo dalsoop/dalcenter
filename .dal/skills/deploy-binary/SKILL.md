@@ -9,7 +9,7 @@ id: DAL:SKILL:depl0001
 
 ```bash
 # 1. 빌드 (호스트, dalcenter 레포에서)
-cd /root/jeonghan/repository/dalcenter
+cd $DALCENTER_REPO  # 호스트의 dalcenter 소스 경로
 go build -o /tmp/dalcenter-new ./cmd/dalcenter/
 
 # 2. dalcli도 빌드 (컨테이너 안에서 사용)
