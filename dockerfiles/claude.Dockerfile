@@ -26,8 +26,12 @@ RUN mkdir -p .claude/skills .claude/hooks
 # Git credential helper — uses GH_TOKEN env var for HTTPS push
 RUN git config --global credential.helper '!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f'
 
-# CCW — JSON-driven multi-agent workflow orchestration
-RUN npm install -g claude-code-workflow && ccw install -m Global || true
+# CCW — JSON-driven multi-agent workflow orchestration (git clone build)
+RUN git clone --depth 1 https://github.com/catlog22/Claude-Code-Workflow.git /opt/ccw && \
+    cd /opt/ccw && npm install --ignore-scripts && npx tsc && \
+    printf '#!/bin/sh\nnode /opt/ccw/dist/index.js "$@"\n' > /usr/local/bin/ccw && \
+    chmod +x /usr/local/bin/ccw && \
+    ccw install -m Global || true
 
 ENV DAL_ROLE=member
 ENV DAL_PLAYER=claude

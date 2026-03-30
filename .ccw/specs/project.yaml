@@ -1,0 +1,20 @@
+name: dalcenter
+description: Dal lifecycle manager — multi-agent orchestration framework
+language: go
+conventions:
+  - All Go code must pass go vet and go build
+  - Test with go test ./... before PR
+  - Branch naming: issue-{N}/{dal-name} or fix/{description}
+  - PR must reference issue number with Closes #{N}
+  - Commit messages in Korean or English, imperative mood
+  - Use CCW tools for code analysis and review
+workflow:
+  - dalops: infrastructure, CLI commands, deployment
+  - dal: documentation, templates, feature implementation
+  - reviewer: PR review, build verification, approve/request-changes
+tools:
+  - ccw tool list — available tools
+  - ccw cli --tool claude — Claude Code execution
+  - ccw spec load — load project conventions
+  - ccw session start — start work session
+  - ccw session end — end with summary
