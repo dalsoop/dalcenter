@@ -41,7 +41,7 @@ func wakeCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("wake: %s → %s\n", args[0], result["container_id"])
+			fmt.Printf("wake: %s → %s\n", args[0], result["container_id"].(string))
 			return nil
 		},
 	}
