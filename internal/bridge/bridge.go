@@ -1,6 +1,13 @@
 package bridge
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+// ErrAuthFailed is returned when the bot token is invalid or expired.
+// This is non-retryable — the caller should stop, not retry.
+var ErrAuthFailed = errors.New("auth failed (token invalid or expired)")
 
 // Message represents a single message exchanged between agents.
 type Message struct {

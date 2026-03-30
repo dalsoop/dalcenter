@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 )
@@ -111,15 +110,11 @@ func (d *Daemon) handleProviderTrip(w http.ResponseWriter, r *http.Request) {
 
 	globalCircuit.Trip(req.DalName, req.Reason)
 
-	// Notify via Mattermost if available
-	if d.mm != nil && d.channelID != "" {
+	// Notify via matterbridge if available
+	if d.bridgeURL != "" {
 		msg := fmt.Sprintf("⚡ **Provider Circuit Tripped** by %s\n전체 dal이 **%s → %s**로 전환 (4시간)\n사유: %s",
 			req.DalName, globalCircuit.primary, globalCircuit.fallback, req.Reason)
-		body := fmt.Sprintf(`{"channel_id":%q,"message":%q}`, d.channelID, msg)
-		r2, _ := http.NewRequest("POST", d.mm.URL+"/api/v4/posts", strings.NewReader(body))
-		r2.Header.Set("Authorization", "Bearer "+d.mm.AdminToken)
-		r2.Header.Set("Content-Type", "application/json")
-		http.DefaultClient.Do(r2)
+		d.bridgePost(msg, "dalcenter")
 	}
 
 	w.Header().Set("Content-Type", "application/json")

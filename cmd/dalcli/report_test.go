@@ -69,10 +69,11 @@ func TestDM_IsDetected(t *testing.T) {
 	}
 }
 
-func TestDM_DifferentChannelID(t *testing.T) {
+func TestDM_MatterbridgeNoDM(t *testing.T) {
 	src := readSrc(t, "cmd_run.go")
-	if !strings.Contains(src, "msg.Channel != cfg.ChannelID") {
-		t.Fatal("isDM must check msg.Channel != cfg.ChannelID")
+	// matterbridge doesn't have DM concept, so isDM is always false
+	if !strings.Contains(src, "isDM := false") {
+		t.Fatal("isDM must be false for matterbridge (no DM concept)")
 	}
 }
 
@@ -174,34 +175,31 @@ func TestTimeout_CommandContext(t *testing.T) {
 
 // ── 크로스 채널 폴링 테스트 ──────────────────────────────
 
-func TestBridge_PollsOnlyDirectMessageChannels(t *testing.T) {
-	src := readSrc(t, "../../internal/bridge/mattermost.go")
-	if !strings.Contains(src, `ch.Type == "D"`) {
-		t.Fatal("bridge must poll direct-message channels")
-	}
-	if strings.Contains(src, `ch.Type == "O"`) || strings.Contains(src, `ch.Type == "P"`) {
-		t.Fatal("bridge must not poll open/private project channels as extra bot inboxes")
+func TestBridge_MatterbridgeStreamReconnect(t *testing.T) {
+	src := readSrc(t, "../../internal/bridge/matterbridge.go")
+	if !strings.Contains(src, "streamOnce") {
+		t.Fatal("matterbridge bridge must have streamOnce for reconnection")
 	}
 }
 
-func TestBridge_SkipsMainChannel(t *testing.T) {
-	src := readSrc(t, "../../internal/bridge/mattermost.go")
-	if !strings.Contains(src, "m.ChannelID") {
-		t.Fatal("must skip main channel in extra polling (already polled)")
+func TestBridge_MatterbridgeGateway(t *testing.T) {
+	src := readSrc(t, "../../internal/bridge/matterbridge.go")
+	if !strings.Contains(src, "Gateway") {
+		t.Fatal("matterbridge bridge must use Gateway field")
 	}
 }
 
-func TestBridge_PerChannelLastAt(t *testing.T) {
-	src := readSrc(t, "../../internal/bridge/mattermost.go")
-	if !strings.Contains(src, "dmLastAt") {
-		t.Fatal("must have per-channel lastAt tracking (dmLastAt)")
+func TestBridge_MatterbridgeSelfFilter(t *testing.T) {
+	src := readSrc(t, "../../internal/bridge/matterbridge.go")
+	if !strings.Contains(src, "BotUsername") {
+		t.Fatal("matterbridge bridge must filter own messages by BotUsername")
 	}
 }
 
-func TestBridge_FetchChannelLatestAt(t *testing.T) {
-	src := readSrc(t, "../../internal/bridge/mattermost.go")
-	if !strings.Contains(src, "fetchChannelLatestAt") {
-		t.Fatal("must have fetchChannelLatestAt for initial sinceAt")
+func TestBridge_MatterbridgeAPIEndpoint(t *testing.T) {
+	src := readSrc(t, "../../internal/bridge/matterbridge.go")
+	if !strings.Contains(src, "/api/message") {
+		t.Fatal("matterbridge bridge must post to /api/message")
 	}
 }
 

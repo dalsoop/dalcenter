@@ -294,7 +294,7 @@ func (d *Daemon) handleTaskMetadata(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTask executes a task directly inside a dal container via docker exec.
-// This works without Mattermost — direct command execution.
+// This works without bridge — direct command execution.
 // POST /api/task
 // Body: {"dal": "leader", "task": "...", "async": false}
 func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {

@@ -141,7 +141,7 @@ Examples:
 func reportCmd(dalName string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "report <message>",
-		Short: "Report to leader (via Mattermost)",
+		Short: "Report to leader (via bridge)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := daemon.NewClient()

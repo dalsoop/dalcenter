@@ -214,7 +214,7 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *
 	}
 	args = append(args,
 		"-e", fmt.Sprintf("DALCENTER_URL=http://%s%s", dockerHostAlias, daemonAddr),
-		"-e", fmt.Sprintf("MATTERMOST_URL=%s", os.Getenv("DALCENTER_MM_URL")), // set by daemon.Run()
+		"-e", fmt.Sprintf("DALCENTER_BRIDGE_URL=%s", os.Getenv("DALCENTER_BRIDGE_URL")),
 		// VeilKey — pass through if available
 		"-e", fmt.Sprintf("VEILKEY_LOCALVAULT_URL=%s", os.Getenv("VEILKEY_LOCALVAULT_URL")),
 		// Mount dal directory (read-only)

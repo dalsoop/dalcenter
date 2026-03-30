@@ -303,40 +303,9 @@ func TestAutoGitWorkflow_NoWorkspace(t *testing.T) {
 
 // ── buildThreadContext with selective thread context ──
 
-func TestBuildThreadContext_WithAPI(t *testing.T) {
-	// Mock MM server that returns thread posts
-	var srvURL string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.Contains(r.URL.Path, "/thread"):
-			resp := map[string]interface{}{
-				"order": []string{"p1", "p2", "p3"},
-				"posts": map[string]interface{}{
-					"p1": map[string]interface{}{"user_id": "user-devops", "message": "@dal-writer ep04 수정해"},
-					"p2": map[string]interface{}{"user_id": "bot-writer", "message": "💬 작업 중..."},
-					"p3": map[string]interface{}{"user_id": "user-devops", "message": "머지해봐"},
-				},
-			}
-			json.NewEncoder(w).Encode(resp)
-		case r.URL.Path == "/api/agent-config/writer":
-			json.NewEncoder(w).Encode(agentConfig{
-				DalName:   "writer",
-				BotToken:  "tok",
-				ChannelID: "ch1",
-				MMURL:     srvURL,
-			})
-		default:
-			w.Write([]byte(`{}`))
-		}
-	}))
-	defer srv.Close()
-	srvURL = srv.URL
-
-	// Set env for fetchAgentConfig
-	os.Setenv("DALCENTER_URL", srv.URL)
-	defer os.Unsetenv("DALCENTER_URL")
-
-	var br bridge.Bridge = &bridge.MattermostBridge{BotUserID: "bot-writer"}
+func TestBuildThreadContext_Simple(t *testing.T) {
+	// With matterbridge, thread context is simplified — no separate API fetch.
+	var br bridge.Bridge = &bridge.MatterbridgeBridge{BotUsername: "bot-writer"}
 	msg := bridge.Message{
 		ID:      "p3",
 		RootID:  "p1",
@@ -346,14 +315,8 @@ func TestBuildThreadContext_WithAPI(t *testing.T) {
 
 	ctx := buildThreadContext(br, msg, "writer", "머지해봐")
 
-	if !strings.Contains(ctx, "원래 요청: @dal-writer ep04 수정해") {
-		t.Error("should contain normalized root task")
-	}
 	if !strings.Contains(ctx, "이번 요청: 머지해봐") {
 		t.Error("should contain latest task")
-	}
-	if strings.Contains(ctx, "💬 작업 중...") {
-		t.Error("should not replay status-only messages into worker prompt")
 	}
 }
 
@@ -452,11 +415,8 @@ func TestCredentialStatusQueryInput_UsesLatestTaskOnly(t *testing.T) {
 	}
 }
 
-func TestBuildThreadContext_Fallback(t *testing.T) {
-	// No DALCENTER_URL → fallback to single message
-	os.Unsetenv("DALCENTER_URL")
-
-	var br bridge.Bridge = &bridge.MattermostBridge{BotUserID: "bot-123"}
+func TestBuildThreadContext_WithRootID(t *testing.T) {
+	var br bridge.Bridge = &bridge.MatterbridgeBridge{BotUsername: "bot-123"}
 	msg := bridge.Message{
 		Content: "테스트 메시지",
 		RootID:  "root-1",
@@ -464,47 +424,18 @@ func TestBuildThreadContext_Fallback(t *testing.T) {
 
 	ctx := buildThreadContext(br, msg, "test-dal", "테스트 메시지")
 	if !strings.Contains(ctx, "이번 요청: 테스트 메시지") {
-		t.Error("fallback should contain latest task")
+		t.Error("should contain latest task")
 	}
 }
 
-func TestBuildTaskSpec_ThreadReplyUsesSelectiveContext(t *testing.T) {
-	var srvURL string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.Contains(r.URL.Path, "/thread"):
-			resp := map[string]interface{}{
-				"order": []string{"p1", "p2", "p3"},
-				"posts": map[string]interface{}{
-					"p1": map[string]interface{}{"user_id": "user-devops", "message": "@dal-writer ep04 수정해"},
-					"p2": map[string]interface{}{"user_id": "bot-writer", "message": "💬 작업 중..."},
-					"p3": map[string]interface{}{"user_id": "user-devops", "message": "머지해봐"},
-				},
-			}
-			json.NewEncoder(w).Encode(resp)
-		case r.URL.Path == "/api/agent-config/writer":
-			json.NewEncoder(w).Encode(agentConfig{
-				DalName:   "writer",
-				BotToken:  "tok",
-				ChannelID: "ch1",
-				MMURL:     srvURL,
-			})
-		default:
-			w.Write([]byte(`{}`))
-		}
-	}))
-	defer srv.Close()
-	srvURL = srv.URL
-
-	t.Setenv("DALCENTER_URL", srv.URL)
-
-	var br bridge.Bridge = &bridge.MattermostBridge{BotUserID: "bot-writer"}
+func TestBuildTaskSpec_ThreadReplyUsesSimpleContext(t *testing.T) {
+	var br bridge.Bridge = &bridge.MatterbridgeBridge{BotUsername: "bot-writer"}
 	msg := bridge.Message{
 		ID:      "p3",
 		RootID:  "p1",
 		From:    "user-devops",
 		Content: "머지해봐",
-		Channel: "ch1",
+		Channel: "dal-team",
 	}
 
 	spec := buildTaskSpec("writer", br, msg, "머지해봐", false, true, false)
@@ -514,19 +445,13 @@ func TestBuildTaskSpec_ThreadReplyUsesSelectiveContext(t *testing.T) {
 	if spec.Source != "thread" {
 		t.Fatalf("source = %s, want thread", spec.Source)
 	}
-	if !strings.Contains(spec.Prompt, "원래 요청: @dal-writer ep04 수정해") {
-		t.Fatalf("prompt missing root task: %s", spec.Prompt)
-	}
 	if !strings.Contains(spec.Prompt, "이번 요청: 머지해봐") {
 		t.Fatalf("prompt missing latest task: %s", spec.Prompt)
-	}
-	if strings.Contains(spec.Prompt, "💬 작업 중...") {
-		t.Fatalf("prompt should exclude status-only messages: %s", spec.Prompt)
 	}
 }
 
 func TestBuildTaskSpec_CredentialStatusIntent(t *testing.T) {
-	var br bridge.Bridge = &bridge.MattermostBridge{BotUserID: "bot-leader"}
+	var br bridge.Bridge = &bridge.MatterbridgeBridge{BotUsername: "bot-leader"}
 	msg := bridge.Message{
 		ID:      "root-1",
 		From:    "user-devops",
@@ -541,21 +466,8 @@ func TestBuildTaskSpec_CredentialStatusIntent(t *testing.T) {
 }
 
 func TestShouldIgnoreDalBotMessage(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v4/users/bot-leader", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"id": "bot-leader", "username": "dal-leader-emotio"})
-	})
-	mux.HandleFunc("/api/v4/users/bot-reviewer", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"id": "bot-reviewer", "username": "dal-reviewer-emotio"})
-	})
-	mux.HandleFunc("/api/v4/users/human-devops", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"id": "human-devops", "username": "devops"})
-	})
-
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	var br bridge.Bridge = &bridge.MattermostBridge{URL: srv.URL, Token: "tok"}
+	// With MatterbridgeBridge, GetUsername returns the input directly (username = identity).
+	var br bridge.Bridge = &bridge.MatterbridgeBridge{BotUsername: "dal-leader-emotio"}
 
 	tests := []struct {
 		name            string
@@ -565,11 +477,11 @@ func TestShouldIgnoreDalBotMessage(t *testing.T) {
 		isDM            bool
 		want            bool
 	}{
-		{"human dm allowed", "human-devops", false, false, true, false},
-		{"dal dm ignored", "bot-reviewer", false, false, true, true},
-		{"leader thread followup allowed", "bot-leader", false, true, false, false},
-		{"nonleader thread followup ignored", "bot-reviewer", false, true, false, true},
-		{"direct mention from dal bot allowed", "bot-reviewer", true, true, false, false},
+		{"human dm allowed", "devops", false, false, true, false},
+		{"dal dm ignored", "dal-reviewer-emotio", false, false, true, true},
+		{"leader thread followup allowed", "dal-leader-emotio", false, true, false, false},
+		{"nonleader thread followup ignored", "dal-reviewer-emotio", false, true, false, true},
+		{"direct mention from dal bot allowed", "dal-reviewer-emotio", true, true, false, false},
 	}
 
 	for _, tt := range tests {
@@ -584,18 +496,7 @@ func TestShouldIgnoreDalBotMessage(t *testing.T) {
 }
 
 func TestShouldIgnoreOperationalDalBotMessage(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v4/users/bot-reviewer", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"id": "bot-reviewer", "username": "dal-reviewer-emotio"})
-	})
-	mux.HandleFunc("/api/v4/users/human-devops", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"id": "human-devops", "username": "devops"})
-	})
-
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	var br bridge.Bridge = &bridge.MattermostBridge{URL: srv.URL, Token: "tok"}
+	var br bridge.Bridge = &bridge.MatterbridgeBridge{BotUsername: "dal-leader-emotio"}
 
 	tests := []struct {
 		name string
@@ -605,7 +506,7 @@ func TestShouldIgnoreOperationalDalBotMessage(t *testing.T) {
 		{
 			name: "dal bot operational notice",
 			msg: bridge.Message{
-				From:    "bot-reviewer",
+				From:    "dal-reviewer-emotio",
 				Content: "@dal-leader [leader] ⚠️ credential 만료. 호스트에서 sync-dal-creds.sh 실행 필요.",
 			},
 			want: true,
@@ -613,7 +514,7 @@ func TestShouldIgnoreOperationalDalBotMessage(t *testing.T) {
 		{
 			name: "dal bot normal message",
 			msg: bridge.Message{
-				From:    "bot-reviewer",
+				From:    "dal-reviewer-emotio",
 				Content: "@dal-leader 리뷰 끝났어",
 			},
 			want: false,
@@ -621,7 +522,7 @@ func TestShouldIgnoreOperationalDalBotMessage(t *testing.T) {
 		{
 			name: "human operational text",
 			msg: bridge.Message{
-				From:    "human-devops",
+				From:    "devops",
 				Content: "sync-dal-creds.sh 왜 뜨지",
 			},
 			want: false,
@@ -686,19 +587,15 @@ func TestIsOperationalNoticeMessage(t *testing.T) {
 
 func TestHandleCredentialStatusQuery_FallbackOnStatusError(t *testing.T) {
 	var sentBody string
-	mmServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v4/posts" {
-			http.NotFound(w, r)
-			return
-		}
+	bridgeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		sentBody = string(body)
-		json.NewEncoder(w).Encode(map[string]string{"id": "post-1"})
+		w.Write([]byte(`{"ok":true}`))
 	}))
-	defer mmServer.Close()
+	defer bridgeServer.Close()
 
 	t.Setenv("DALCENTER_URL", "http://127.0.0.1:1")
-	var br bridge.Bridge = &bridge.MattermostBridge{URL: mmServer.URL, Token: "tok", ChannelID: "ch-1"}
+	br := bridge.NewMatterbridgeBridge(bridgeServer.URL, "", "dal-team", "dal-leader")
 
 	handled, err := handleCredentialStatusQuery("leader", "sync-dal-creds.sh 왜 뜨지", "root-1", "ch-1", br)
 	if err != nil {
@@ -777,9 +674,8 @@ func TestFetchAgentConfig_Success(t *testing.T) {
 		}
 		json.NewEncoder(w).Encode(agentConfig{
 			DalName:   "writer",
-			BotToken:  "tok-123",
-			ChannelID: "ch-abc",
-			MMURL:     "http://mm:8065",
+			BridgeURL: "http://bridge:4242",
+			Gateway:   "dal-team",
 		})
 	}))
 	defer srv.Close()
@@ -791,11 +687,11 @@ func TestFetchAgentConfig_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
-	if cfg.BotToken != "tok-123" {
-		t.Errorf("token = %q", cfg.BotToken)
+	if cfg.BridgeURL != "http://bridge:4242" {
+		t.Errorf("bridge_url = %q", cfg.BridgeURL)
 	}
-	if cfg.MMURL != "http://mm:8065" {
-		t.Errorf("url = %q", cfg.MMURL)
+	if cfg.Gateway != "dal-team" {
+		t.Errorf("gateway = %q", cfg.Gateway)
 	}
 }
 
@@ -823,38 +719,6 @@ func TestFetchAgentConfig_ServerError(t *testing.T) {
 	}
 }
 
-func TestRefreshAgentConfig_Success(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Fatalf("method = %s, want POST", r.Method)
-		}
-		if r.URL.Path != "/api/agent-config/writer/refresh-token" {
-			t.Fatalf("path = %s", r.URL.Path)
-		}
-		json.NewEncoder(w).Encode(map[string]string{
-			"dal_name":     "writer",
-			"bot_token":    "fresh-token",
-			"bot_username": "dal-writer-abcd",
-			"channel_id":   "ch-abc",
-			"mm_url":       "http://mm:8065",
-		})
-	}))
-	defer srv.Close()
-
-	os.Setenv("DALCENTER_URL", srv.URL)
-	defer os.Unsetenv("DALCENTER_URL")
-
-	cfg, err := refreshAgentConfig("writer")
-	if err != nil {
-		t.Fatalf("refreshAgentConfig: %v", err)
-	}
-	if cfg.BotToken != "fresh-token" {
-		t.Fatalf("token = %q", cfg.BotToken)
-	}
-	if cfg.BotUsername != "dal-writer-abcd" {
-		t.Fatalf("bot username = %q", cfg.BotUsername)
-	}
-}
 
 // ── executeTask role branching (verify command construction) ──
 

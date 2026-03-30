@@ -2,9 +2,6 @@ package daemon
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -18,25 +15,15 @@ import (
 	"time"
 
 	"github.com/dalsoop/dalcenter/internal/localdal"
-	"github.com/dalsoop/dalcenter/internal/talk"
 )
-
-// MattermostConfig holds Mattermost connection settings.
-type MattermostConfig struct {
-	URL        string // e.g. http://10.50.0.202:8065
-	AdminToken string // PAT with admin access
-	TeamName   string // e.g. "prelik"
-}
 
 // Daemon is the dalcenter HTTP API server.
 type Daemon struct {
 	addr         string
 	localdalRoot string
 	serviceRepo  string // service repo path to mount as /workspace
-	mm           *MattermostConfig
+	bridgeURL    string // matterbridge API URL
 	apiToken     string                // Bearer token for write endpoints (empty = no auth)
-	channelID    string                // channel for this project
-	opsChannelID string                // shared ops channel for credential sync notices
 	containers   map[string]*Container // dal name -> container
 	mu           sync.RWMutex
 	credSyncMu    sync.Mutex
@@ -63,12 +50,10 @@ type Container struct {
 	Skills      int       `json:"skills"`
 	LastSeenAt  time.Time `json:"last_seen_at,omitempty"`
 	IdleFor     string    `json:"idle_for,omitempty"`
-	BotToken    string    `json:"-"` // Mattermost bot token
-	BotUsername string    `json:"-"` // Mattermost bot @username
 }
 
 // New creates a daemon.
-func New(addr, localdalRoot, serviceRepo string, mm *MattermostConfig) *Daemon {
+func New(addr, localdalRoot, serviceRepo, bridgeURL string) *Daemon {
 	token := os.Getenv("DALCENTER_TOKEN")
 	if token != "" {
 		log.Println("[daemon] API token auth enabled for write endpoints")
@@ -80,7 +65,7 @@ func New(addr, localdalRoot, serviceRepo string, mm *MattermostConfig) *Daemon {
 		addr:         addr,
 		localdalRoot: localdalRoot,
 		serviceRepo:  serviceRepo,
-		mm:           mm,
+		bridgeURL:    strings.TrimRight(bridgeURL, "/"),
 		apiToken:     token,
 		containers:   make(map[string]*Container),
 		escalations:  newEscalationStoreWithFile(filepath.Join(dataDir(serviceRepo), "escalations.json")),
@@ -109,101 +94,6 @@ func dalContainerName(name, uuid string) string {
 	return containerBasePrefix + name + "-" + uuidShort(uuid)
 }
 
-const (
-	mattermostBotUsernameMaxLen = 22
-	mattermostBotRepoHashLen    = 4
-)
-
-// dalBotUsername returns a repo-namespaced MM bot username.
-// Format: dal-{name}-{repoNs}, kept within Mattermost's username length limit.
-func dalBotUsername(serviceRepo, name, _ string) string {
-	namePart := sanitizeMMUsernamePart(name)
-	if namePart == "" {
-		namePart = "bot"
-	}
-
-	maxNameLen := mattermostBotUsernameMaxLen - len(containerBasePrefix) - 1 - mattermostBotRepoHashLen
-	if maxNameLen < 1 {
-		maxNameLen = 1
-	}
-	if len(namePart) > maxNameLen {
-		namePart = namePart[:maxNameLen]
-	}
-
-	repoPart := repoBotNamespace(serviceRepo, mattermostBotUsernameMaxLen-len(containerBasePrefix)-len(namePart)-1)
-	return containerBasePrefix + namePart + "-" + repoPart
-}
-
-const sessionNonceLen = 4
-
-// generateSessionNonce returns a random 4-char hex string for session-unique bot naming.
-func generateSessionNonce() string {
-	b := make([]byte, 2)
-	rand.Read(b)
-	return hex.EncodeToString(b)
-}
-
-// dalSessionBotUsername returns a session-unique MM bot username.
-// Format: dal-{name}-{repoHash3}{nonce4}, kept within 22 chars.
-func dalSessionBotUsername(serviceRepo, name, sessionNonce string) string {
-	namePart := sanitizeMMUsernamePart(name)
-	if namePart == "" {
-		namePart = "bot"
-	}
-
-	// Budget: "dal-" (4) + name + "-" (1) + repoHash(3) + nonce(4) = 12 + name
-	repoHashLen := 3
-	overhead := len(containerBasePrefix) + 1 + repoHashLen + sessionNonceLen
-	maxNameLen := mattermostBotUsernameMaxLen - overhead
-	if maxNameLen < 1 {
-		maxNameLen = 1
-	}
-	if len(namePart) > maxNameLen {
-		namePart = namePart[:maxNameLen]
-	}
-
-	absPath, _ := filepath.Abs(serviceRepo)
-	sum := sha256.Sum256([]byte(absPath))
-	repoHash := hex.EncodeToString(sum[:])[:repoHashLen]
-
-	return containerBasePrefix + namePart + "-" + repoHash + sessionNonce
-}
-
-func repoBotNamespace(serviceRepo string, maxLen int) string {
-	if maxLen < 1 {
-		return "x"
-	}
-	baseName := filepath.Base(serviceRepo)
-	if baseName == "" || baseName == "." {
-		baseName = "repo"
-	}
-	clean := sanitizeMMUsernamePart(baseName)
-	if clean == "" {
-		clean = "repo"
-	}
-	absPath, _ := filepath.Abs(serviceRepo)
-	sum := sha256.Sum256([]byte(absPath))
-	hash := hex.EncodeToString(sum[:])[:mattermostBotRepoHashLen]
-	if maxLen <= len(hash) {
-		return hash[:maxLen]
-	}
-	prefixLen := maxLen - len(hash)
-	if len(clean) > prefixLen {
-		clean = clean[:prefixLen]
-	}
-	return clean + hash
-}
-
-func sanitizeMMUsernamePart(raw string) string {
-	var b strings.Builder
-	b.Grow(len(raw))
-	for _, r := range strings.ToLower(raw) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
 
 // requireAuth is middleware that checks Bearer token for write endpoints.
 // If DALCENTER_TOKEN is not set, all requests are allowed.
@@ -247,91 +137,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// Start peer health watcher (dalcenter HA)
 	go d.startPeerWatcher(ctx)
 
-	// Start session bot GC (cleanup disabled bots every hour)
-	go func() {
-		ticker := time.NewTicker(1 * time.Hour)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if d.mm != nil && d.mm.URL != "" {
-					cleaned := talk.CleanupStaleBots(d.mm.URL, d.mm.AdminToken)
-					if cleaned > 0 {
-						log.Printf("[daemon] bot GC: cleaned %d stale session bots", cleaned)
-					}
-				}
-			}
-		}
-	}()
-
-	// Export MM URL for containers to use
-	if d.mm != nil && d.mm.URL != "" {
-		os.Setenv("DALCENTER_MM_URL", d.mm.URL)
-	}
-
-	// Setup Mattermost channel (repo name = channel name)
-	if d.mm != nil && d.mm.URL != "" {
-		repoName := filepath.Base(d.serviceRepo)
-		if repoName == "" || repoName == "." {
-			repoName = "dalcenter"
-		}
-		teamID, channelID, err := talk.GetTeamAndChannel(d.mm.URL, d.mm.AdminToken, d.mm.TeamName, repoName)
-		if err != nil {
-			log.Printf("[daemon] mattermost channel setup failed: %v", err)
-		} else {
-			d.channelID = channelID
-			log.Printf("[daemon] mattermost: team=%s channel=%s (%s)", teamID, channelID[:8], repoName)
-
-			// dal-leaders 공유 채널 자동 생성 (cross-project leader 소통)
-			if leadersChID, err := talk.FindOrCreateChannel(d.mm.URL, d.mm.AdminToken, teamID, "dal-leaders"); err == nil {
-				log.Printf("[daemon] dal-leaders channel ready: %s", leadersChID[:8])
-			}
-			if credentialOpsEnabled() {
-				if opsChID, err := talk.FindOrCreateChannel(d.mm.URL, d.mm.AdminToken, teamID, credentialOpsChannelName()); err == nil {
-					d.opsChannelID = opsChID
-					log.Printf("[daemon] credential ops channel ready: %s (%s)", opsChID[:8], credentialOpsChannelName())
-				} else {
-					log.Printf("[daemon] credential ops channel setup failed: %v", err)
-				}
-			}
-		}
+	if d.bridgeURL != "" {
+		log.Printf("[daemon] matterbridge URL: %s", d.bridgeURL)
 	}
 
 	// Reconcile existing containers from a previous daemon run
 	d.reconcile()
-
-	// Cleanup orphan bot DMs on startup (delayed to ensure reconcile is complete)
-	if d.mm != nil && d.mm.URL != "" {
-		go func() {
-			// Wait for reconcile to finish populating containers
-			time.Sleep(30 * time.Second)
-
-			teamID, _, _ := talk.GetTeamAndChannel(d.mm.URL, d.mm.AdminToken, d.mm.TeamName, filepath.Base(d.serviceRepo))
-			if teamID != "" {
-				// Collect active bot usernames from running containers
-				d.mu.RLock()
-				var active []string
-				for _, c := range d.containers {
-					if c.BotUsername != "" {
-						active = append(active, c.BotUsername)
-					}
-				}
-				d.mu.RUnlock()
-				// Always keep system bots and dalcenter-admin
-				active = append(active, "dalcenter-admin")
-				// Only run cleanup if we have at least 1 active container
-				// (prevents wiping all bots when reconcile finds nothing)
-				if len(active) <= 1 {
-					log.Printf("[daemon] orphan cleanup skipped: no active containers yet")
-					return
-				}
-				talk.CleanupOrphanBotDMs(d.mm.URL, d.mm.AdminToken, teamID, active)
-				log.Printf("[daemon] orphan bot DM cleanup done (active=%d)", len(active))
-			}
-		}()
-	}
 
 	mux := http.NewServeMux()
 
@@ -352,8 +163,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /api/message", d.requireAuth(d.handleMessage))
 	mux.HandleFunc("POST /api/activity/{name}", d.requireAuth(d.handleActivity))
 	mux.HandleFunc("GET /api/agent-config/{name}", d.handleAgentConfig)
-	mux.HandleFunc("POST /api/agent-config/{name}/refresh-token", d.handleAgentTokenRefresh)
-	// Direct task execution (works without Mattermost)
+	// Direct task execution (works without bridge)
 	mux.HandleFunc("POST /api/task", d.requireAuth(d.handleTask))
 	mux.HandleFunc("POST /api/task/start", d.requireAuth(d.handleTaskStart))
 	mux.HandleFunc("GET /api/task/{id}", d.handleTaskStatus)
@@ -564,36 +374,10 @@ func (d *Daemon) handleWake(w http.ResponseWriter, r *http.Request) {
 		warnings = append(warnings, setupWarnings...)
 	}
 
-	// Setup per-session Mattermost bot
-	sessionNonce := generateSessionNonce()
-	var botToken string
-	if d.mm != nil && d.mm.URL != "" && d.channelID != "" {
-		botUsername := dalSessionBotUsername(d.serviceRepo, dal.Name, sessionNonce)
-		teamID, _, _ := talk.GetTeamAndChannel(d.mm.URL, d.mm.AdminToken, d.mm.TeamName, filepath.Base(d.serviceRepo))
-		bot, err := talk.SetupBot(d.mm.URL, d.mm.AdminToken, teamID, d.channelID, botUsername, dal.Name, fmt.Sprintf("dal %s (%s)", dal.Name, dal.Role))
-		if err != nil {
-			log.Printf("[daemon] mattermost bot setup for %s: %v (continuing without)", name, err)
-		} else {
-			botToken = bot.Token
-			log.Printf("[daemon] session bot: %s (user=%s, nonce=%s)", botUsername, bot.UserID[:8], sessionNonce)
-
-			// Leader → dal-leaders 공유 채널에도 자동 참여 (cross-project 소통)
-			if dal.Role == "leader" {
-				leadersChName := "dal-leaders"
-				if leadersChID, err := talk.FindOrCreateChannel(d.mm.URL, d.mm.AdminToken, teamID, leadersChName); err == nil {
-					if err := talk.AddUserToChannel(d.mm.URL, d.mm.AdminToken, leadersChID, bot.UserID); err == nil {
-						log.Printf("[daemon] leader %s joined dal-leaders channel", botUsername)
-					}
-				}
-			}
-		}
-	}
-
 	ws := dal.Workspace
 	if ws == "" {
 		ws = "shared"
 	}
-	botUser := dalSessionBotUsername(d.serviceRepo, dal.Name, sessionNonce)
 	d.mu.Lock()
 	d.containers[instanceName] = &Container{
 		DalName:     instanceName,
@@ -605,8 +389,6 @@ func (d *Daemon) handleWake(w http.ResponseWriter, r *http.Request) {
 		Workspace:   ws,
 		Skills:      len(dal.Skills),
 		LastSeenAt:  time.Now().UTC(),
-		BotToken:    botToken,
-		BotUsername: botUser,
 	}
 	d.mu.Unlock()
 
@@ -615,7 +397,6 @@ func (d *Daemon) handleWake(w http.ResponseWriter, r *http.Request) {
 		Name:        instanceName,
 		Repo:        d.serviceRepo,
 		ContainerID: containerID,
-		BotToken:    botToken,
 		Status:      "running",
 	})
 
@@ -656,17 +437,6 @@ func (d *Daemon) handleSleep(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Teardown session bot: remove from channel, hide DM, disable + revoke tokens
-	if d.mm != nil && d.mm.URL != "" && d.channelID != "" && c.BotUsername != "" {
-		talk.RemoveBotFromChannel(d.mm.URL, d.mm.AdminToken, d.channelID, c.BotUsername)
-		teamID, _, _ := talk.GetTeamAndChannel(d.mm.URL, d.mm.AdminToken, d.mm.TeamName, filepath.Base(d.serviceRepo))
-		if teamID != "" {
-			talk.HideBotDMFromUsers(d.mm.URL, d.mm.AdminToken, teamID, c.BotUsername)
-		}
-		// Disable session bot (will be GC'd after 24h)
-		talk.TeardownBot(d.mm.URL, d.mm.AdminToken, c.BotUsername)
-	}
-
 	d.mu.Lock()
 	c.Status = "stopped"
 	delete(d.containers, name)
@@ -689,9 +459,6 @@ func (d *Daemon) handleRestart(w http.ResponseWriter, r *http.Request) {
 
 	if ok {
 		dockerStop(c.ContainerID)
-		if d.mm != nil && d.mm.URL != "" && d.channelID != "" && c.BotUsername != "" {
-			talk.RemoveBotFromChannel(d.mm.URL, d.mm.AdminToken, d.channelID, c.BotUsername)
-		}
 		d.mu.Lock()
 		delete(d.containers, name)
 		d.mu.Unlock()
@@ -746,10 +513,6 @@ func (d *Daemon) handleReplace(w http.ResponseWriter, r *http.Request) {
 	// Sleep the original
 	if original.ContainerID != "" {
 		dockerStop(original.ContainerID)
-		if d.mm != nil && d.mm.URL != "" && d.channelID != "" && original.BotUsername != "" {
-			talk.RemoveBotFromChannel(d.mm.URL, d.mm.AdminToken, d.channelID, original.BotUsername)
-			talk.TeardownBot(d.mm.URL, d.mm.AdminToken, original.BotUsername)
-		}
 		d.mu.Lock()
 		delete(d.containers, name)
 		d.mu.Unlock()
@@ -841,7 +604,6 @@ func (d *Daemon) runSync() (synced, restarted []string) {
 				Status:      "running",
 				Skills:      len(dal.Skills),
 				LastSeenAt:  time.Now().UTC(),
-				BotToken:    c.BotToken,
 			}
 			d.mu.Unlock()
 			restarted = append(restarted, name)
@@ -1083,14 +845,13 @@ func (d *Daemon) handleMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", 400)
 		return
 	}
-	if d.mm == nil || d.channelID == "" {
-		// Fallback: if Mattermost is not configured, try direct task execution
-		// Extract task from message and execute in container
+
+	if d.bridgeURL == "" {
+		// Fallback: if bridge is not configured, try direct task execution
 		d.mu.RLock()
 		_, hasDal := d.containers[req.From]
 		d.mu.RUnlock()
 		if !hasDal {
-			// Find first running dal to target (from message content heuristics)
 			d.mu.RLock()
 			for name := range d.containers {
 				req.From = name
@@ -1103,96 +864,53 @@ func (d *Daemon) handleMessage(w http.ResponseWriter, r *http.Request) {
 			c, ok := d.containers[req.From]
 			d.mu.RUnlock()
 			if ok {
-				log.Printf("[scope] ⚠️ message fallback to direct task — Mattermost not configured, bypassing leader routing")
+				log.Printf("[scope] message fallback to direct task — bridge not configured")
 				tr := d.tasks.New(c.DalName, req.Message)
 				go d.execTaskInContainer(c, tr)
 				respondJSON(w, http.StatusAccepted, map[string]string{
 					"status":  "task_dispatched",
 					"task_id": tr.ID,
-					"note":    "mattermost unavailable — task dispatched directly to container",
+					"note":    "bridge unavailable — task dispatched directly to container",
 				})
 				return
 			}
 		}
-		http.Error(w, "mattermost not configured and no running dals", 503)
+		http.Error(w, "bridge not configured and no running dals", 503)
 		return
 	}
 
-	// Use admin token when posting TO a dal (so the dal sees it as external message).
-	// Bot token would make the dal's bridge skip the message as "self".
-	// Bot token is only for the dal's OWN responses — if we use the dal's bot token here,
-	// the dal's bridge will skip the message as "self".
-	token := d.mm.AdminToken
-
-	msg := req.Message
-	d.mu.RLock()
-	_, fromRunningDal := d.containers[req.From]
-	if !fromRunningDal {
-		// Auto-prefix leader mention only for external/user-originated messages.
-		// Internal dal notices (claims, reports, status) should reach humans without
-		// being re-consumed by the leader as a new task.
-		for _, c := range d.containers {
-			if c.Role == "leader" {
-				// Use the stable Mattermost bot username if available.
-				mention := "@"
-				if c.BotUsername != "" {
-					mention += c.BotUsername
-				} else {
-					mention += dalBotUsername(d.serviceRepo, c.DalName, c.UUID)
-				}
-				legacyMention := fmt.Sprintf("@dal-%s-%s", c.DalName, uuidShort(c.UUID))
-				altMention := "@" + c.DalName
-				if !strings.Contains(msg, mention) && !strings.Contains(msg, legacyMention) && !strings.Contains(msg, altMention) {
-					msg = mention + " " + msg
-				}
-				break
-			}
-		}
+	dalName := req.From
+	if dalName == "" {
+		dalName = "dalcenter"
 	}
-	d.mu.RUnlock()
-
-	// Post message (with optional thread)
-	var body string
-	if req.ThreadID != "" {
-		body = fmt.Sprintf(`{"channel_id":%q,"message":%q,"root_id":%q}`, d.channelID, msg, req.ThreadID)
-	} else {
-		body = fmt.Sprintf(`{"channel_id":%q,"message":%q}`, d.channelID, msg)
-	}
-	respBody, err := mmPost(d.mm.URL, token, "/api/v4/posts", body)
-	if err != nil {
+	if err := d.bridgePost(req.Message, dalName); err != nil {
 		http.Error(w, fmt.Sprintf("post failed: %v", err), 500)
 		return
 	}
 
-	// Return post ID so caller can start/continue thread
-	postID := ""
-	var postResp map[string]any
-	if json.Unmarshal(respBody, &postResp) == nil {
-		if id, ok := postResp["id"].(string); ok {
-			postID = id
-		}
-	}
-
 	json.NewEncoder(w).Encode(map[string]string{
-		"status":  "sent",
-		"post_id": postID,
+		"status": "sent",
 	})
 }
 
-func mmPost(mmURL, token, path, body string) ([]byte, error) {
-	req, _ := http.NewRequest("POST", mmURL+path, strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+token)
+// bridgePost sends a message via matterbridge API.
+func (d *Daemon) bridgePost(text, username string) error {
+	if d.bridgeURL == "" {
+		return fmt.Errorf("bridge URL not configured")
+	}
+	body := fmt.Sprintf(`{"text":%q,"username":%q,"gateway":"dal-team"}`, text, username)
+	req, _ := http.NewRequest("POST", d.bridgeURL+"/api/message", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("%d: %s", resp.StatusCode, string(respBody))
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("bridge %d: %s", resp.StatusCode, string(respBody))
 	}
-	return respBody, nil
+	return nil
 }
 
 // reconcile discovers existing dal-* containers and restores daemon state.
@@ -1245,11 +963,6 @@ func (d *Daemon) reconcile() {
 				continue
 			}
 
-			botToken := ""
-			if entry != nil {
-				botToken = entry.BotToken
-			}
-
 			d.mu.Lock()
 			d.containers[instanceName] = &Container{
 				DalName:     instanceName,
@@ -1260,7 +973,6 @@ func (d *Daemon) reconcile() {
 				Status:      "running",
 				Skills:      len(dal.Skills),
 				LastSeenAt:  time.Now().UTC(),
-				BotToken:    botToken,
 			}
 			d.mu.Unlock()
 			running++
@@ -1306,24 +1018,13 @@ func extractInstanceName(containerName string) string {
 	return s
 }
 
-// handleAgentConfig returns MM connection info for a dal to run its agent loop.
+// handleAgentConfig returns bridge connection info for a dal to run its agent loop.
 // Called by dalcli run inside the container.
 func (d *Daemon) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	c, ok := d.agentContainer(name)
 	if !ok {
 		http.Error(w, "dal not found", 404)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(d.agentConfigResponse(name, c))
-}
-
-func (d *Daemon) handleAgentTokenRefresh(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	c, err := d.refreshAgentBotToken(name)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -1339,22 +1040,18 @@ func (d *Daemon) agentContainer(name string) (*Container, bool) {
 
 func (d *Daemon) agentConfigResponse(name string, c *Container) map[string]string {
 	resp := map[string]string{
-		"dal_name":     c.DalName,
-		"uuid":         c.UUID,
-		"bot_token":    c.BotToken,
-		"bot_username": c.BotUsername,
-		"channel_id":   d.channelID,
-	}
-	if d.mm != nil {
-		resp["mm_url"] = d.mm.URL
+		"dal_name":   c.DalName,
+		"uuid":       c.UUID,
+		"bridge_url": d.bridgeURL,
+		"gateway":    "dal-team",
 	}
 
-	// Inject team member bot names so leader can mention them correctly
+	// Inject team member names so leader can mention them correctly
 	d.mu.RLock()
 	var teammates []string
 	for n, cc := range d.containers {
-		if n != name && cc.BotUsername != "" {
-			teammates = append(teammates, fmt.Sprintf("%s=%s", n, cc.BotUsername))
+		if n != name {
+			teammates = append(teammates, fmt.Sprintf("%s=%s", n, cc.DalName))
 		}
 	}
 	d.mu.RUnlock()
@@ -1362,63 +1059,6 @@ func (d *Daemon) agentConfigResponse(name string, c *Container) map[string]strin
 		resp["team_members"] = strings.Join(teammates, ",")
 	}
 	return resp
-}
-
-func (d *Daemon) refreshAgentBotToken(name string) (*Container, error) {
-	if d.mm == nil || d.mm.URL == "" || d.channelID == "" {
-		return nil, fmt.Errorf("mattermost not configured")
-	}
-	c, ok := d.agentContainer(name)
-	if !ok {
-		return nil, fmt.Errorf("dal %q not found", name)
-	}
-
-	dal, err := localdal.ReadDalCue(d.dalCuePath(name), name)
-	if err != nil {
-		if idx := strings.LastIndex(name, "-"); idx > 0 {
-			baseName := name[:idx]
-			dal, err = localdal.ReadDalCue(d.dalCuePath(baseName), baseName)
-		}
-	}
-	if err != nil {
-		return nil, fmt.Errorf("load dal profile: %w", err)
-	}
-
-	teamID, _, err := talk.GetTeamAndChannel(d.mm.URL, d.mm.AdminToken, d.mm.TeamName, filepath.Base(d.serviceRepo))
-	if err != nil {
-		return nil, fmt.Errorf("resolve mattermost team/channel: %w", err)
-	}
-
-	botUsername := c.BotUsername
-	if botUsername == "" {
-		botUsername = dalBotUsername(d.serviceRepo, dal.Name, dal.UUID)
-	}
-	bot, err := talk.SetupBot(d.mm.URL, d.mm.AdminToken, teamID, d.channelID, botUsername, dal.Name, fmt.Sprintf("dal %s (%s)", dal.Name, dal.Role))
-	if err != nil {
-		return nil, fmt.Errorf("refresh bot token: %w", err)
-	}
-
-	d.mu.Lock()
-	current, ok := d.containers[name]
-	if !ok {
-		d.mu.Unlock()
-		return nil, fmt.Errorf("dal %q disappeared during refresh", name)
-	}
-	current.BotToken = bot.Token
-	current.BotUsername = botUsername
-	currentCopy := *current
-	d.mu.Unlock()
-
-	d.registry.Set(currentCopy.UUID, RegistryEntry{
-		Name:        name,
-		Repo:        d.serviceRepo,
-		ContainerID: currentCopy.ContainerID,
-		BotToken:    bot.Token,
-		Status:      currentCopy.Status,
-	})
-
-	log.Printf("[daemon] refreshed mattermost bot token for %s (%s)", name, botUsername)
-	return &currentCopy, nil
 }
 
 func (d *Daemon) dalCuePath(name string) string {

@@ -368,7 +368,7 @@ func (c *Client) TaskStatus(id string) (*TaskResult, error) {
 	return &result, nil
 }
 
-// StartTaskRun registers a tracked task for an external execution path such as Mattermost.
+// StartTaskRun registers a tracked task for an external execution path such as matterbridge.
 func (c *Client) StartTaskRun(dal, task string) (*TaskResult, error) {
 	body := fmt.Sprintf(`{"dal":%q,"task":%q}`, dal, task)
 	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/task/start", strings.NewReader(body))

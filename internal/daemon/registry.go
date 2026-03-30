@@ -18,7 +18,6 @@ type RegistryEntry struct {
 	Name        string `json:"name"`
 	Repo        string `json:"repo"`
 	ContainerID string `json:"container_id"`
-	BotToken    string `json:"bot_token"`
 	Status      string `json:"status"`
 }
 

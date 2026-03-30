@@ -158,33 +158,6 @@ func TestHandleRunPage_TaskNotFound(t *testing.T) {
 	}
 }
 
-func TestMmPost_ServerError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(500)
-		w.Write([]byte("error"))
-	}))
-	defer srv.Close()
-
-	_, err := mmPost(srv.URL, "token", "/api/v4/posts", `{"message":"test"}`)
-	if err == nil {
-		t.Fatal("expected error for 500")
-	}
-}
-
-func TestMmPost_Success(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"id":"post-1"}`))
-	}))
-	defer srv.Close()
-
-	resp, err := mmPost(srv.URL, "token", "/api/v4/posts", `{"message":"test"}`)
-	if err != nil {
-		t.Fatalf("mmPost: %v", err)
-	}
-	if len(resp) == 0 {
-		t.Fatal("empty response")
-	}
-}
 
 func TestDalCuePath(t *testing.T) {
 	d := &Daemon{
@@ -197,23 +170,21 @@ func TestDalCuePath(t *testing.T) {
 	}
 }
 
-func TestHandleMessage_NoMM(t *testing.T) {
+func TestHandleMessage_NoBridge(t *testing.T) {
 	d := &Daemon{
-		mm:         nil,
-		channelID:  "",
 		containers: map[string]*Container{},
 	}
 
-	body := `{"dal":"dev","message":"hello"}`
+	body := `{"from":"dev","message":"hello"}`
 	req := httptest.NewRequest("POST", "/api/message", nil)
 	req.Body = nopCloser(body)
 	w := httptest.NewRecorder()
 
 	d.handleMessage(w, req)
 
-	// MM 없으면 503 또는 200(empty) — 둘 다 허용
-	if w.Code != 503 && w.Code != 200 {
-		t.Fatalf("status = %d, want 503 or 200", w.Code)
+	// Bridge 없으면 503 (no running dals) 허용
+	if w.Code != 503 {
+		t.Fatalf("status = %d, want 503", w.Code)
 	}
 }
 
@@ -242,13 +213,12 @@ func TestHandleEscalate_PostsNotice(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		posted = append(posted, string(body))
-		w.Write([]byte(`{"id":"post-1"}`))
+		w.Write([]byte(`{"ok":true}`))
 	}))
 	defer srv.Close()
 
 	d := &Daemon{
-		mm:          &MattermostConfig{URL: srv.URL, AdminToken: "tok"},
-		channelID:   "ch-123",
+		bridgeURL:   srv.URL,
 		escalations: newEscalationStore(),
 	}
 
@@ -261,7 +231,7 @@ func TestHandleEscalate_PostsNotice(t *testing.T) {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
 	if len(posted) == 0 {
-		t.Fatal("expected escalation notice to be posted to Mattermost")
+		t.Fatal("expected escalation notice to be posted via bridge")
 	}
 	if !strings.Contains(posted[0], "verifier") {
 		t.Fatalf("posted message should mention dal name: %s", posted[0])
@@ -272,13 +242,12 @@ func TestHandleEscalate_NoticeCooldown(t *testing.T) {
 	var postCount int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		postCount++
-		w.Write([]byte(`{"id":"post-1"}`))
+		w.Write([]byte(`{"ok":true}`))
 	}))
 	defer srv.Close()
 
 	d := &Daemon{
-		mm:          &MattermostConfig{URL: srv.URL, AdminToken: "tok"},
-		channelID:   "ch-123",
+		bridgeURL:   srv.URL,
 		escalations: newEscalationStore(),
 	}
 

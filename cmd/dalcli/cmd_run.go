@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -23,13 +22,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// agentConfig holds MM connection info fetched from dalcenter daemon.
+// agentConfig holds bridge connection info fetched from dalcenter daemon.
 type agentConfig struct {
 	DalName     string `json:"dal_name"`
-	BotToken    string `json:"bot_token"`
-	BotUsername string `json:"bot_username"`
-	ChannelID   string `json:"channel_id"`
-	MMURL       string `json:"mm_url"`
+	BridgeURL   string `json:"bridge_url"`
+	Gateway     string `json:"gateway"`
 	TeamMembers string `json:"team_members"`
 }
 
@@ -461,54 +458,14 @@ func recordDalActivity(dalName string) {
 	}
 }
 
-func refreshAgentConfig(dalName string) (*agentConfig, error) {
-	client, err := dalcenterClientOrFallback()
-	if err != nil {
-		return nil, err
-	}
-	result, err := client.RefreshAgentToken(dalName)
-	if err != nil {
-		return nil, err
-	}
-	return &agentConfig{
-		DalName:     result["dal_name"],
-		BotToken:    result["bot_token"],
-		BotUsername: result["bot_username"],
-		ChannelID:   result["channel_id"],
-		MMURL:       result["mm_url"],
-		TeamMembers: result["team_members"],
-	}, nil
-}
-
 func sendBridgeMessage(br bridge.Bridge, dalName string, cfg *agentConfig, msg bridge.Message) error {
-	err := br.Send(msg)
-	if err == nil {
-		return nil
-	}
-	if !errors.Is(err, bridge.ErrAuthFailed) {
-		return err
-	}
-	refreshed, refreshErr := refreshAgentConfig(dalName)
-	if refreshErr != nil {
-		return fmt.Errorf("refresh bot token: %w", refreshErr)
-	}
-	if refreshed.BotToken == "" {
-		return fmt.Errorf("refresh bot token: empty token")
-	}
-	br.UpdateToken(refreshed.BotToken)
-	if cfg != nil {
-		*cfg = *refreshed
-		if refreshed.TeamMembers != "" {
-			os.Setenv("DAL_TEAM_MEMBERS", refreshed.TeamMembers)
-		}
-	}
 	return br.Send(msg)
 }
 
 func runCmd(dalName string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "run",
-		Short: "Start agent loop — poll Mattermost, execute tasks via Claude, report back",
+		Short: "Start agent loop — poll bridge, execute tasks via Claude, report back",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAgentLoop(dalName)
 		},
@@ -519,42 +476,39 @@ func runAgentLoop(dalName string) error {
 	log.Printf("[agent] starting agent loop for %s", dalName)
 
 	cfg, err := fetchAgentConfig(dalName)
-	mmAvailable := err == nil && cfg != nil && cfg.BotToken != "" && cfg.MMURL != "" && cfg.ChannelID != ""
+	bridgeAvailable := err == nil && cfg != nil && cfg.BridgeURL != ""
 
-	// Fallback: 환경변수에서 MM 정보 직접 읽기 (호스트 모드 — Docker 없이 실행 시)
-	if !mmAvailable {
-		if envURL := os.Getenv("DAL_MM_URL"); envURL != "" {
-			if envToken := os.Getenv("DAL_BOT_TOKEN"); envToken != "" {
-				if envCh := os.Getenv("DAL_CHANNEL_ID"); envCh != "" {
-					cfg = &agentConfig{
-						DalName:     dalName,
-						MMURL:       envURL,
-						BotToken:    envToken,
-						ChannelID:   envCh,
-						TeamMembers: os.Getenv("DAL_TEAM_MEMBERS"),
-					}
-					mmAvailable = true
-					log.Printf("[agent] using env-based MM config (host mode)")
-				}
+	// Fallback: 환경변수에서 bridge 정보 직접 읽기 (호스트 모드 — Docker 없이 실행 시)
+	if !bridgeAvailable {
+		if envURL := os.Getenv("DAL_BRIDGE_URL"); envURL != "" {
+			cfg = &agentConfig{
+				DalName:     dalName,
+				BridgeURL:   envURL,
+				Gateway:     os.Getenv("DAL_GATEWAY"),
+				TeamMembers: os.Getenv("DAL_TEAM_MEMBERS"),
 			}
+			if cfg.Gateway == "" {
+				cfg.Gateway = "dal-team"
+			}
+			bridgeAvailable = true
+			log.Printf("[agent] using env-based bridge config (host mode)")
 		}
 	}
 
-	// Auto-task-only mode: MM 없어도 auto_task만 돌릴 수 있음 (scribe 등 백그라운드 dal)
+	// Auto-task-only mode: bridge 없어도 auto_task만 돌릴 수 있음 (scribe 등 백그라운드 dal)
 	autoTask := os.Getenv("DAL_AUTO_TASK")
-	if !mmAvailable && autoTask != "" {
-		log.Printf("[agent] MM not available — entering auto-task-only mode")
+	if !bridgeAvailable && autoTask != "" {
+		log.Printf("[agent] bridge not available — entering auto-task-only mode")
 		return runAutoTaskOnly(dalName, autoTask)
 	}
 
-	if !mmAvailable {
+	if !bridgeAvailable {
 		if err != nil {
 			return fmt.Errorf("fetch agent config: %w", err)
 		}
-		return fmt.Errorf("incomplete agent config: mm_url=%q bot_token_set=%v channel_id=%q",
-			cfg.MMURL, cfg.BotToken != "", cfg.ChannelID)
+		return fmt.Errorf("incomplete agent config: bridge_url=%q", cfg.BridgeURL)
 	}
-	log.Printf("[agent] connected: mm=%s channel=%s", cfg.MMURL, cfg.ChannelID[:8])
+	log.Printf("[agent] connected: bridge=%s gateway=%s", cfg.BridgeURL, cfg.Gateway)
 
 	// Inject team members into env so leader mentions work correctly
 	if cfg.TeamMembers != "" {
@@ -572,8 +526,7 @@ func runAgentLoop(dalName string) error {
 		}
 	}()
 
-	br := bridge.NewMattermostBridge(cfg.MMURL, cfg.BotToken, cfg.ChannelID, 5*time.Second)
-	br.SetNoDM(shouldDisableDM(os.Getenv("DAL_NO_DM")))
+	br := bridge.NewMatterbridgeBridge(cfg.BridgeURL, "", cfg.Gateway, dalName)
 	if err := br.Connect(); err != nil {
 		return fmt.Errorf("bridge connect: %w", err)
 	}
@@ -584,9 +537,6 @@ func runAgentLoop(dalName string) error {
 	uuidShort := os.Getenv("DAL_UUID_SHORT")
 	stableMention := fmt.Sprintf("@dal-%s", dalName)
 	mention := stableMention
-	if cfg.BotUsername != "" {
-		mention = "@" + cfg.BotUsername
-	}
 	var legacyMention string
 	if uuidShort != "" {
 		legacyMention = fmt.Sprintf("@dal-%s-%s", dalName, uuidShort)
@@ -663,7 +613,7 @@ func runAgentLoop(dalName string) error {
 
 		isDirectMention := containsAnyMention(msg.Content, mention, stableMention, legacyMention, altMention)
 		isThreadReply := msg.RootID != "" && isActiveThread(&activeThreads, msg.RootID)
-		isDM := msg.Channel != "" && msg.Channel != cfg.ChannelID // DM = different channel than main
+		isDM := false // matterbridge doesn't have DM concept
 
 		log.Printf("[agent] msg from=%s mention=%v(m=%q legacy=%q alt=%q) thread=%v dm=%v content=%s",
 			msg.From[:8], isDirectMention, mention, legacyMention, altMention, isThreadReply, isDM, truncate(msg.Content, 60))
@@ -1527,7 +1477,7 @@ func parseInterval(s string, fallback time.Duration) time.Duration {
 	return d
 }
 
-// runAutoTaskOnly runs only the auto-task loop without Mattermost.
+// runAutoTaskOnly runs only the auto-task loop without bridge.
 // Used by background dals like scribe that don't need MM.
 func runAutoTaskOnly(dalName, autoTask string) error {
 	interval := parseInterval(os.Getenv("DAL_AUTO_INTERVAL"), 30*time.Minute)

@@ -249,7 +249,7 @@ const defaultScribeInstructions = `# Scribe — 문서 관리자
 
 ## Boundaries
 I handle: inbox 병합, history 압축, 아카이빙, 자동 커밋
-I don't handle: 코드, 리뷰, 테스트, 라우팅, Mattermost 대화
+I don't handle: 코드, 리뷰, 테스트, 라우팅
 
 ## Rules
 - push 실패 시 재시도만. force push, reset 금지. 3회 실패 시 leader에게 claim.

@@ -193,12 +193,11 @@ func (d *Daemon) handleResolveEscalation(w http.ResponseWriter, r *http.Request)
 
 const escalationNoticeCooldown = 10 * time.Minute
 
-// postEscalationNotice posts an escalation notice directly to the project
-// Mattermost channel from the daemon process. This bypasses the leader dal,
-// which is essential when credentials are expired and the leader cannot
-// call its AI provider.
+// postEscalationNotice posts an escalation notice via matterbridge.
+// This bypasses the leader dal, which is essential when credentials are
+// expired and the leader cannot call its AI provider.
 func (d *Daemon) postEscalationNotice(esc Escalation) {
-	if d.mm == nil || d.channelID == "" {
+	if d.bridgeURL == "" {
 		return
 	}
 
@@ -218,8 +217,7 @@ func (d *Daemon) postEscalationNotice(esc Escalation) {
 	msg := fmt.Sprintf("[dalcenter] :warning: **에스컬레이션** dal=%s class=%s\n> %s",
 		esc.Dal, esc.ErrorClass, truncateEscalationOutput(esc.Output, 300))
 
-	body := fmt.Sprintf(`{"channel_id":%q,"message":%q}`, d.channelID, msg)
-	if _, err := mmPost(d.mm.URL, d.mm.AdminToken, "/api/v4/posts", body); err != nil {
+	if err := d.bridgePost(msg, "dalcenter"); err != nil {
 		log.Printf("[escalation] notice post failed: %v", err)
 	}
 }

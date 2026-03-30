@@ -2,22 +2,18 @@ package daemon
 
 import (
 	"encoding/json"
-	"net/http"
 	"net/http/httptest"
 	"testing"
 )
 
 func TestHandleAgentConfig_Found(t *testing.T) {
 	d := &Daemon{
+		bridgeURL: "http://bridge:4242",
 		containers: map[string]*Container{
 			"story-checker": {
-				DalName:     "story-checker",
-				BotToken:    "bot-tok-123",
-				BotUsername: "dal-storychecker-abcd",
+				DalName: "story-checker",
 			},
 		},
-		channelID: "ch-abc",
-		mm:        &MattermostConfig{URL: "http://mm:8065"},
 	}
 
 	req := httptest.NewRequest("GET", "/api/agent-config/story-checker", nil)
@@ -36,17 +32,11 @@ func TestHandleAgentConfig_Found(t *testing.T) {
 	if resp["dal_name"] != "story-checker" {
 		t.Errorf("dal_name = %q", resp["dal_name"])
 	}
-	if resp["bot_token"] != "bot-tok-123" {
-		t.Errorf("bot_token = %q", resp["bot_token"])
+	if resp["bridge_url"] != "http://bridge:4242" {
+		t.Errorf("bridge_url = %q", resp["bridge_url"])
 	}
-	if resp["bot_username"] != "dal-storychecker-abcd" {
-		t.Errorf("bot_username = %q", resp["bot_username"])
-	}
-	if resp["channel_id"] != "ch-abc" {
-		t.Errorf("channel_id = %q", resp["channel_id"])
-	}
-	if resp["mm_url"] != "http://mm:8065" {
-		t.Errorf("mm_url = %q", resp["mm_url"])
+	if resp["gateway"] != "dal-team" {
+		t.Errorf("gateway = %q", resp["gateway"])
 	}
 }
 
@@ -66,13 +56,11 @@ func TestHandleAgentConfig_NotFound(t *testing.T) {
 	}
 }
 
-func TestHandleAgentConfig_NoMM(t *testing.T) {
+func TestHandleAgentConfig_NoBridge(t *testing.T) {
 	d := &Daemon{
 		containers: map[string]*Container{
-			"dev": {DalName: "dev", BotToken: "tok"},
+			"dev": {DalName: "dev"},
 		},
-		channelID: "ch-1",
-		mm:        nil,
 	}
 
 	req := httptest.NewRequest("GET", "/api/agent-config/dev", nil)
@@ -84,25 +72,8 @@ func TestHandleAgentConfig_NoMM(t *testing.T) {
 	var resp map[string]string
 	json.NewDecoder(w.Body).Decode(&resp)
 
-	if resp["mm_url"] != "" {
-		t.Errorf("mm_url should be empty when mm is nil, got %q", resp["mm_url"])
+	if resp["bridge_url"] != "" {
+		t.Errorf("bridge_url should be empty when not configured, got %q", resp["bridge_url"])
 	}
 }
 
-func TestHandleAgentTokenRefresh_RequiresMattermost(t *testing.T) {
-	d := &Daemon{
-		containers: map[string]*Container{
-			"leader": {DalName: "leader", UUID: "leader-uuid"},
-		},
-	}
-
-	req := httptest.NewRequest(http.MethodPost, "/api/agent-config/leader/refresh-token", nil)
-	req.SetPathValue("name", "leader")
-	w := httptest.NewRecorder()
-
-	d.handleAgentTokenRefresh(w, req)
-
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want %d", w.Code, http.StatusInternalServerError)
-	}
-}
