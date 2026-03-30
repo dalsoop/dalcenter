@@ -265,11 +265,34 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *
 		}
 	}
 
-	// Mount skills
+	// Mount skills: shared skills from .dal/skills/ + per-dal skills from dal.cue
+	mountedSkills := make(map[string]bool)
+
+	// 1. Always mount all shared skills from .dal/skills/
+	sharedSkillsDir := filepath.Join(localdalRoot, "skills")
+	if entries, err := os.ReadDir(sharedSkillsDir); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			skillName := entry.Name()
+			skillPath := filepath.Join(sharedSkillsDir, skillName)
+			targetPath := filepath.Join(home, "skills", skillName)
+			args = append(args, "-v", fmt.Sprintf("%s:%s:ro", skillPath, targetPath))
+			mountedSkills[skillName] = true
+		}
+	}
+
+	// 2. Mount per-dal skills from dal.cue (skip if already mounted as shared)
 	for _, skill := range dal.Skills {
+		skillBase := filepath.Base(skill)
+		if mountedSkills[skillBase] {
+			continue
+		}
 		skillPath := filepath.Join(localdalRoot, skill)
-		targetPath := filepath.Join(home, "skills", filepath.Base(skill))
+		targetPath := filepath.Join(home, "skills", skillBase)
 		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", skillPath, targetPath))
+		mountedSkills[skillBase] = true
 	}
 
 	// Mount charter.md as the right filename (e.g. CLAUDE.md, AGENTS.md, GEMINI.md).
@@ -559,7 +582,7 @@ func dockerStop(containerID string) error {
 
 // dockerNeedsRestart checks if a container needs to be recreated based on dal.cue changes.
 // Returns a reason string if restart is needed, empty string if not.
-func dockerNeedsRestart(containerID string, dal *localdal.DalProfile) (string, error) {
+func dockerNeedsRestart(localdalRoot, containerID string, dal *localdal.DalProfile) (string, error) {
 	// 1. Check image: compare current container image with expected
 	imgCmd := exec.Command("docker", "inspect", containerID, "--format", "{{.Config.Image}}")
 	imgOut, err := imgCmd.Output()
@@ -578,7 +601,7 @@ func dockerNeedsRestart(containerID string, dal *localdal.DalProfile) (string, e
 		return fmt.Sprintf("image changed: %s -> %s", currentImage, expectedImage), nil
 	}
 
-	// 2. Check skill mounts: compare mount count with dal.Skills length
+	// 2. Check skill mounts: shared skills from .dal/skills/ + per-dal skills
 	mountsCmd := exec.Command("docker", "inspect", containerID, "--format", "{{json .Mounts}}")
 	mountsOut, err := mountsCmd.Output()
 	if err != nil {
@@ -604,8 +627,22 @@ func dockerNeedsRestart(containerID string, dal *localdal.DalProfile) (string, e
 		}
 	}
 
-	if skillMountCount != len(dal.Skills) {
-		return fmt.Sprintf("skills changed: container has %d mounts, dal.cue has %d skills", skillMountCount, len(dal.Skills)), nil
+	// Expected: shared skills from .dal/skills/ + unique per-dal skills
+	expectedSkills := make(map[string]bool)
+	sharedSkillsDir := filepath.Join(localdalRoot, "skills")
+	if entries, err := os.ReadDir(sharedSkillsDir); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				expectedSkills[entry.Name()] = true
+			}
+		}
+	}
+	for _, skill := range dal.Skills {
+		expectedSkills[filepath.Base(skill)] = true
+	}
+
+	if skillMountCount != len(expectedSkills) {
+		return fmt.Sprintf("skills changed: container has %d mounts, expected %d skills", skillMountCount, len(expectedSkills)), nil
 	}
 
 	return "", nil
@@ -615,7 +652,7 @@ func dockerNeedsRestart(containerID string, dal *localdal.DalProfile) (string, e
 // Since instructions and skills are bind-mounted, file content changes are automatic.
 // Sync detects structural changes (image tag, skills added/removed) that require container recreation.
 func dockerSync(localdalRoot, containerID string, dal *localdal.DalProfile) (needsRestart bool, reason string, err error) {
-	reason, err = dockerNeedsRestart(containerID, dal)
+	reason, err = dockerNeedsRestart(localdalRoot, containerID, dal)
 	if err != nil {
 		return false, "", err
 	}
