@@ -76,5 +76,5 @@ pct exec 105 -- journalctl -u dalcenter@dalcenter --since "30 min ago" --no-page
 ### 자동 갱신이 안 될 때
 1. 호스트 timer 확인: `systemctl status dal-credential-sync.timer`
 2. soft-serve 확인: `pct exec 105 -- ssh -p 23231 localhost info`
-3. git repo 상태: `pct exec 105 -- git -C /root/.dalcenter-credentials log --oneline -3`
+3. git repo 상태: `pct exec 105 -- git -C /root/.dalcenter-credential-origin log --oneline -3`
 4. 환경변수 확인: `pct exec 105 -- grep CRED_GIT /etc/dalcenter/*.env`

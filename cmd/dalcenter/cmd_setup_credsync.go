@@ -47,7 +47,7 @@ credentials to soft-serve (see dal-credential-sync script).`,
 
 	cmd.Flags().StringVar(&softServeAddr, "soft-serve", "localhost:23231", "soft-serve SSH address (host:port)")
 	cmd.Flags().StringVar(&repoName, "repo", "dal-credentials", "soft-serve repository name")
-	cmd.Flags().StringVar(&clonePath, "clone-path", "/root/.dalcenter-credentials", "local clone path")
+	cmd.Flags().StringVar(&clonePath, "clone-path", "/root/.dalcenter-credential-origin", "local clone path")
 	cmd.Flags().StringVar(&hostPubKey, "host-pubkey", "", "PVE host SSH public key to register (optional)")
 	return cmd
 }
