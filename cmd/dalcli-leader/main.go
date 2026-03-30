@@ -20,7 +20,7 @@ func main() {
 		Short: fmt.Sprintf("Dal CLI for leader dal (%s)", dalName),
 	}
 
-	root.AddCommand(wakeCmd(), sleepCmd(), psCmd(), statusCmd(), logsCmd(), syncCmd(), assignCmd(dalName), postCmd())
+	root.AddCommand(wakeCmd(), sleepCmd(), psCmd(), statusCmd(), logsCmd(), syncCmd(), assignCmd(dalName), postCmd(), issueWorkflowCmd())
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -54,7 +54,7 @@ func wakeCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&issueID, "issue", "", "Issue ID for branch creation (e.g. 489)")
+	cmd.Flags().StringVar(&issueID, "issue", "", "Issue ID for branch creation (creates issue-N/dal branch)")
 	return cmd
 }
 
@@ -220,6 +220,35 @@ func postCmd() *cobra.Command {
 			return nil
 		},
 	}
+	return cmd
+}
+
+func issueWorkflowCmd() *cobra.Command {
+	var member string
+	cmd := &cobra.Command{
+		Use:   "issue-workflow <issue-id> <task>",
+		Short: "Start full issue workflow: wake member → assign task → track → notify",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := daemon.NewClient()
+			if err != nil {
+				return err
+			}
+			issueID := args[0]
+			task := args[1]
+			if member == "" {
+				member = "dev"
+			}
+			result, err := client.StartIssueWorkflow(issueID, member, task, "")
+			if err != nil {
+				return err
+			}
+			fmt.Printf("issue-workflow: started %s (issue=#%s, member=%s)\n", result.WorkflowID, issueID, member)
+			fmt.Printf("status: %s\n", result.Status)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&member, "member", "dev", "Member dal to assign")
 	return cmd
 }
 
