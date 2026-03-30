@@ -41,11 +41,9 @@ func TestDockerRun_SettingsHasBashPermission(t *testing.T) {
 func TestHandleAgentConfig_IncludesTeamMembers(t *testing.T) {
 	d := &Daemon{
 		containers: map[string]*Container{
-			"leader": {DalName: "leader", BotToken: "tok-l", BotUsername: "dal-leader-lead"},
-			"dev":    {DalName: "dev", BotToken: "tok-d", BotUsername: "dal-dev-dev01"},
+			"leader": {DalName: "leader"},
+			"dev":    {DalName: "dev"},
 		},
-		channelID: "ch-1",
-		mm:        &MattermostConfig{URL: "http://mm:8065"},
 	}
 
 	req := httptest.NewRequest("GET", "/api/agent-config/leader", nil)
@@ -57,7 +55,7 @@ func TestHandleAgentConfig_IncludesTeamMembers(t *testing.T) {
 	json.NewDecoder(w.Body).Decode(&resp)
 
 	tm := resp["team_members"]
-	if !strings.Contains(tm, "dev=dal-dev-dev01") {
+	if !strings.Contains(tm, "dev=dev") {
 		t.Errorf("team_members should include dev, got %q", tm)
 	}
 	if strings.Contains(tm, "leader=") {
@@ -68,10 +66,8 @@ func TestHandleAgentConfig_IncludesTeamMembers(t *testing.T) {
 func TestHandleAgentConfig_NoTeamMembersWhenAlone(t *testing.T) {
 	d := &Daemon{
 		containers: map[string]*Container{
-			"solo": {DalName: "solo", BotToken: "tok", BotUsername: "dal-solo-s"},
+			"solo": {DalName: "solo"},
 		},
-		channelID: "ch-1",
-		mm:        &MattermostConfig{URL: "http://mm:8065"},
 	}
 
 	req := httptest.NewRequest("GET", "/api/agent-config/solo", nil)
@@ -87,14 +83,12 @@ func TestHandleAgentConfig_NoTeamMembersWhenAlone(t *testing.T) {
 	}
 }
 
-func TestHandleAgentConfig_SkipsEmptyBotUsername(t *testing.T) {
+func TestHandleAgentConfig_IncludesAllMembers(t *testing.T) {
 	d := &Daemon{
 		containers: map[string]*Container{
-			"leader": {DalName: "leader", BotToken: "tok", BotUsername: "dal-leader-x"},
-			"ghost":  {DalName: "ghost", BotToken: "tok", BotUsername: ""},
+			"leader": {DalName: "leader"},
+			"ghost":  {DalName: "ghost"},
 		},
-		channelID: "ch-1",
-		mm:        &MattermostConfig{URL: "http://mm:8065"},
 	}
 
 	req := httptest.NewRequest("GET", "/api/agent-config/leader", nil)
@@ -105,156 +99,10 @@ func TestHandleAgentConfig_SkipsEmptyBotUsername(t *testing.T) {
 	var resp map[string]string
 	json.NewDecoder(w.Body).Decode(&resp)
 
-	if strings.Contains(resp["team_members"], "ghost") {
-		t.Error("team_members should skip members with empty BotUsername")
+	if !strings.Contains(resp["team_members"], "ghost=ghost") {
+		t.Error("team_members should include ghost")
 	}
 }
-
-// ── #120: BotUsername stored in Container ─────────────────────
-
-func TestContainerHasBotUsername(t *testing.T) {
-	c := &Container{
-		DalName:     "dev",
-		BotUsername: "dal-dev-abc123",
-	}
-	if c.BotUsername == "" {
-		t.Fatal("Container must have BotUsername field")
-	}
-}
-
-func TestDalBotUsername_Format(t *testing.T) {
-	cases := []struct {
-		repo string
-		name string
-		uuid string
-	}{
-		{"/root/veilkey-v2", "leader", "v2-leader-20260327"},
-		{"/root/dalcenter", "dev", "dc-codex-dev-20260327"},
-		{"/root/veilkey-selfhosted", "verifier", "vk-verifier-20260326"},
-	}
-	for _, tc := range cases {
-		got := dalBotUsername(tc.repo, tc.name, tc.uuid)
-		if !strings.HasPrefix(got, "dal-"+tc.name+"-") {
-			t.Errorf("dalBotUsername(%q, %q, %q) = %q, want prefix %q", tc.repo, tc.name, tc.uuid, got, "dal-"+tc.name+"-")
-		}
-		if len(got) > mattermostBotUsernameMaxLen {
-			t.Errorf("dalBotUsername(%q, %q, %q) too long: %q (%d)", tc.repo, tc.name, tc.uuid, got, len(got))
-		}
-	}
-}
-
-func TestDalBotUsername_DifferentRepos(t *testing.T) {
-	a := dalBotUsername("/root/dalcenter", "leader", "leader-20260326")
-	b := dalBotUsername("/root/veilkey-v2", "leader", "v2-leader-20260327")
-	if a == b {
-		t.Fatalf("expected different usernames per repo, got %q", a)
-	}
-}
-
-func TestDalBotUsername_ShortUUID(t *testing.T) {
-	result := dalBotUsername("/root/dalcenter", "dev", "abc")
-	if !strings.HasPrefix(result, "dal-dev-") {
-		t.Errorf("got %q", result)
-	}
-}
-
-func TestDalBotUsername_LongNameWithinLimit(t *testing.T) {
-	result := dalBotUsername("/root/bridge-of-gaya-script", "story-checker", "very-long-uuid-string-here")
-	if len(result) > mattermostBotUsernameMaxLen {
-		t.Fatalf("username too long: %q (%d)", result, len(result))
-	}
-	if !strings.HasPrefix(result, "dal-story") {
-		t.Fatalf("expected recognizable prefix, got %q", result)
-	}
-}
-
-// ── Orphan cleanup safety ────────────────────────────────────
-
-func TestOrphanCleanup_SkipsWhenNoContainers(t *testing.T) {
-	// Verify the code guards against empty containers
-	src := readSource(t, "daemon.go")
-	if !strings.Contains(src, "no active containers") {
-		t.Fatal("orphan cleanup must skip when no active containers (prevents wiping all bots)")
-	}
-}
-
-func TestOrphanCleanup_DelayedExecution(t *testing.T) {
-	src := readSource(t, "daemon.go")
-	if !strings.Contains(src, "time.Sleep") {
-		t.Fatal("orphan cleanup must be delayed to wait for reconcile")
-	}
-}
-
-func TestOrphanCleanup_IncludesDalcenterAdmin(t *testing.T) {
-	src := readSource(t, "daemon.go")
-	if !strings.Contains(src, `"dalcenter-admin"`) {
-		t.Fatal("orphan cleanup must always keep dalcenter-admin active")
-	}
-}
-
-// ── Sleep bot cleanup ────────────────────────────────────────
-
-func TestSleep_RemovesBotFromChannel(t *testing.T) {
-	src := readSource(t, "daemon.go")
-	if !strings.Contains(src, "RemoveBotFromChannel") {
-		t.Fatal("sleep must call RemoveBotFromChannel")
-	}
-}
-
-func TestSleep_HidesBotDM(t *testing.T) {
-	src := readSource(t, "daemon.go")
-	if !strings.Contains(src, "HideBotDMFromUsers") {
-		t.Fatal("sleep must call HideBotDMFromUsers to hide DM from sidebar")
-	}
-}
-
-// ── Bot welcome DM cleanup ───────────────────────────────────
-
-func TestSetupBot_CleansWelcomeDM(t *testing.T) {
-	src := readSource(t, "../talk/bot.go")
-	if !strings.Contains(src, "cleanupBotWelcomeDMs") {
-		t.Fatal("SetupBot must call cleanupBotWelcomeDMs after adding bot to channel")
-	}
-}
-
-func TestCleanupBotWelcomeDMs_TargetsCorrectMessage(t *testing.T) {
-	src := readSource(t, "../talk/bot.go")
-	if !strings.Contains(src, "Please add me to teams") {
-		t.Fatal("cleanupBotWelcomeDMs must target 'Please add me to teams' message")
-	}
-}
-
-// ── Bot token management ─────────────────────────────────────
-
-func TestSetupBot_LimitsTokenCount(t *testing.T) {
-	src := readSource(t, "../talk/bot.go")
-	if !strings.Contains(src, "keep max 2 tokens") {
-		t.Fatal("SetupBot must limit token count to prevent accumulation")
-	}
-}
-
-func TestRemoveBotFromChannel_Exists(t *testing.T) {
-	src := readSource(t, "../talk/bot.go")
-	if !strings.Contains(src, "func RemoveBotFromChannel(") {
-		t.Fatal("RemoveBotFromChannel must exist")
-	}
-}
-
-func TestHideBotDMFromUsers_Exists(t *testing.T) {
-	src := readSource(t, "../talk/bot.go")
-	if !strings.Contains(src, "func HideBotDMFromUsers(") {
-		t.Fatal("HideBotDMFromUsers must exist")
-	}
-}
-
-func TestCleanupOrphanBotDMs_Exists(t *testing.T) {
-	src := readSource(t, "../talk/bot.go")
-	if !strings.Contains(src, "func CleanupOrphanBotDMs(") {
-		t.Fatal("CleanupOrphanBotDMs must exist")
-	}
-}
-
-// ── Member → Leader reporting ────────────────────────────────
 
 // ── Bridge: GetUsername ──────────────────────────────────────
 
@@ -275,21 +123,7 @@ func readSource(t *testing.T, relPath string) string {
 	return string(data)
 }
 
-// ── MATTERMOST_URL 환경변수 주입 ─────────────────────────
-
-func TestMattermostURLExported(t *testing.T) {
-	src := readSource(t, "daemon.go")
-	if !strings.Contains(src, "DALCENTER_MM_URL") {
-		t.Fatal("daemon must export DALCENTER_MM_URL for containers")
-	}
-}
-
-func TestDockerRun_InjectsMattermostURL(t *testing.T) {
-	src := readSource(t, "docker.go")
-	if !strings.Contains(src, "MATTERMOST_URL") {
-		t.Fatal("dockerRun must inject MATTERMOST_URL into container")
-	}
-}
+// ── 환경변수 주입 ─────────────────────────
 
 func TestDockerRun_InjectsExternalURL(t *testing.T) {
 	src := readSource(t, "docker.go")
@@ -349,12 +183,10 @@ func TestClientAgentConfig_Exists(t *testing.T) {
 func TestHandleAgentConfig_MultipleTeamMembers(t *testing.T) {
 	d := &Daemon{
 		containers: map[string]*Container{
-			"leader": {DalName: "leader", BotToken: "t1", BotUsername: "dal-leader-x"},
-			"dev":    {DalName: "dev", BotToken: "t2", BotUsername: "dal-dev-y"},
-			"test":   {DalName: "test", BotToken: "t3", BotUsername: "dal-test-z"},
+			"leader": {DalName: "leader"},
+			"dev":    {DalName: "dev"},
+			"test":   {DalName: "test"},
 		},
-		channelID: "ch",
-		mm:        &MattermostConfig{URL: "http://mm"},
 	}
 	req := httptest.NewRequest("GET", "/api/agent-config/leader", nil)
 	req.SetPathValue("name", "leader")
@@ -365,10 +197,10 @@ func TestHandleAgentConfig_MultipleTeamMembers(t *testing.T) {
 	json.NewDecoder(w.Body).Decode(&resp)
 
 	tm := resp["team_members"]
-	if !strings.Contains(tm, "dev=dal-dev-y") {
+	if !strings.Contains(tm, "dev=dev") {
 		t.Errorf("should include dev, got %q", tm)
 	}
-	if !strings.Contains(tm, "test=dal-test-z") {
+	if !strings.Contains(tm, "test=test") {
 		t.Errorf("should include test, got %q", tm)
 	}
 	if strings.Contains(tm, "leader=") {
@@ -388,11 +220,6 @@ func TestContainer_AllFieldsPresent(t *testing.T) {
 		Status:      "running",
 		Workspace:   "shared",
 		Skills:      3,
-		BotToken:    "tok",
-		BotUsername: "dal-test",
-	}
-	if c.BotUsername == "" {
-		t.Fatal("BotUsername must be settable")
 	}
 	if c.Workspace == "" {
 		t.Fatal("Workspace must be settable")

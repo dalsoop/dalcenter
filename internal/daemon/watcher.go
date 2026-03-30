@@ -17,7 +17,7 @@ const (
 )
 
 // startPeerWatcher periodically checks the peer dalcenter's health endpoint.
-// After peerFailThreshold consecutive failures, it sends a Mattermost alert.
+// After peerFailThreshold consecutive failures, it sends a bridge alert.
 func (d *Daemon) startPeerWatcher(ctx context.Context) {
 	peerURL := os.Getenv("DALCENTER_PEER_URL")
 	if peerURL == "" {
@@ -78,7 +78,7 @@ func checkPeerHealth(client *http.Client, url string) error {
 	return nil
 }
 
-// notifyPeerDown posts a Mattermost alert about peer failure.
+// notifyPeerDown posts a bridge alert about peer failure.
 func (d *Daemon) notifyPeerDown(peerURL string, lastErr error) {
 	msg := fmt.Sprintf(":warning: **dalcenter peer down** — `%s` failed %d consecutive health checks. Last error: %s",
 		peerURL, peerFailThreshold, lastErr)
@@ -86,21 +86,20 @@ func (d *Daemon) notifyPeerDown(peerURL string, lastErr error) {
 	log.Printf("[peer-watcher] alert sent: peer %s down", peerURL)
 }
 
-// notifyPeerRecovered posts a Mattermost recovery notice.
+// notifyPeerRecovered posts a bridge recovery notice.
 func (d *Daemon) notifyPeerRecovered(peerURL string) {
 	msg := fmt.Sprintf(":white_check_mark: **dalcenter peer recovered** — `%s` is healthy again", peerURL)
 	d.postAlert(msg)
 	log.Printf("[peer-watcher] recovery notice sent: peer %s up", peerURL)
 }
 
-// postAlert sends a message to the project's Mattermost channel.
+// postAlert sends a message via matterbridge.
 func (d *Daemon) postAlert(message string) {
-	if d.mm == nil || d.mm.URL == "" || d.channelID == "" {
-		log.Printf("[peer-watcher] mattermost not configured — alert logged only: %s", message)
+	if d.bridgeURL == "" {
+		log.Printf("[peer-watcher] bridge not configured — alert logged only: %s", message)
 		return
 	}
-	body := fmt.Sprintf(`{"channel_id":%q,"message":%q}`, d.channelID, message)
-	if _, err := mmPost(d.mm.URL, d.mm.AdminToken, "/api/v4/posts", body); err != nil {
+	if err := d.bridgePost(message, "dalcenter"); err != nil {
 		log.Printf("[peer-watcher] failed to post alert: %v", err)
 	}
 }

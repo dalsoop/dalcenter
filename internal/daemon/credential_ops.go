@@ -337,21 +337,19 @@ func (d *Daemon) finishCredentialSyncFailure(req credentialSyncRequest, player, 
 }
 
 func (d *Daemon) postOpsMessage(message string) {
-	if d.mm == nil || d.opsChannelID == "" {
+	if d.bridgeURL == "" {
 		return
 	}
-	body := fmt.Sprintf(`{"channel_id":%q,"message":%q}`, d.opsChannelID, message)
-	if _, err := mmPost(d.mm.URL, d.mm.AdminToken, "/api/v4/posts", body); err != nil {
+	if err := d.bridgePost(message, "dalcenter-ops"); err != nil {
 		log.Printf("[credential-ops] ops post failed: %v", err)
 	}
 }
 
 func (d *Daemon) postProjectMessage(message string) {
-	if d.mm == nil || d.channelID == "" {
+	if d.bridgeURL == "" {
 		return
 	}
-	body := fmt.Sprintf(`{"channel_id":%q,"message":%q}`, d.channelID, message)
-	if _, err := mmPost(d.mm.URL, d.mm.AdminToken, "/api/v4/posts", body); err != nil {
+	if err := d.bridgePost(message, "dalcenter"); err != nil {
 		log.Printf("[credential-ops] project post failed: %v", err)
 	}
 }

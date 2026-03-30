@@ -224,24 +224,24 @@ func TestPostCmd_Exists(t *testing.T) {
 	}
 }
 
-func TestPostCmd_RequiresChannel(t *testing.T) {
+func TestPostCmd_UsesBridgeURL(t *testing.T) {
 	src := readSrc(t, "main.go")
-	if !strings.Contains(src, `"channel"`) {
-		t.Fatal("post cmd must have --channel flag")
+	if !strings.Contains(src, "DALCENTER_BRIDGE_URL") {
+		t.Fatal("post cmd must use DALCENTER_BRIDGE_URL env var")
 	}
 }
 
-func TestPostCmd_UsesBotToken(t *testing.T) {
+func TestPostCmd_UsesGateway(t *testing.T) {
 	src := readSrc(t, "main.go")
-	if !strings.Contains(src, "bot_token") {
-		t.Fatal("post cmd must get bot_token from agent config")
+	if !strings.Contains(src, "DAL_GATEWAY") {
+		t.Fatal("post cmd must use DAL_GATEWAY env var")
 	}
 }
 
-func TestPostCmd_PostsToMM(t *testing.T) {
+func TestPostCmd_PostsViaMatterbridge(t *testing.T) {
 	src := readSrc(t, "main.go")
-	if !strings.Contains(src, "/api/v4/posts") {
-		t.Fatal("post cmd must call Mattermost /api/v4/posts")
+	if !strings.Contains(src, "/api/message") {
+		t.Fatal("post cmd must call matterbridge /api/message")
 	}
 }
 

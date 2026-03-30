@@ -1,10 +1,7 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 
 	"github.com/dalsoop/dalcenter/internal/bridge"
@@ -90,68 +87,12 @@ func runTaskSpec(spec TaskSpec) TaskResult {
 }
 
 func buildThreadContext(br bridge.Bridge, newMsg bridge.Message, dalName, latestTask string) string {
-	rootTask := fetchThreadRootTask(br, newMsg, dalName)
+	// With matterbridge, thread context comes through the stream, not a separate API call.
 	var sb strings.Builder
-	sb.WriteString("너는 Mattermost 스레드의 후속 작업만 처리한다.\n")
-	if rootTask != "" && rootTask != latestTask {
-		sb.WriteString(fmt.Sprintf("원래 요청: %s\n", rootTask))
-	}
+	sb.WriteString("너는 스레드의 후속 작업만 처리한다.\n")
 	sb.WriteString(fmt.Sprintf("이번 요청: %s\n", latestTask))
 	sb.WriteString("규칙: 스레드 전체를 재현하지 말고 위 요청만 근거로 간결하게 처리한다.")
 	return sb.String()
-}
-
-func fetchThreadRootTask(br bridge.Bridge, newMsg bridge.Message, dalName string) string {
-	threadID := newMsg.RootID
-	if threadID == "" {
-		threadID = newMsg.ID
-	}
-
-	agentCfg, _ := fetchAgentConfig(dalName)
-	if agentCfg == nil || agentCfg.MMURL == "" || agentCfg.BotToken == "" {
-		return ""
-	}
-
-	url := fmt.Sprintf("%s/api/v4/posts/%s/thread", agentCfg.MMURL, threadID)
-	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("Authorization", "Bearer "+agentCfg.BotToken)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return ""
-	}
-
-	var thread struct {
-		Order []string                   `json:"order"`
-		Posts map[string]json.RawMessage `json:"posts"`
-	}
-	if json.Unmarshal(body, &thread) != nil {
-		return ""
-	}
-
-	for _, pid := range thread.Order {
-		var post struct {
-			UserID  string `json:"user_id"`
-			Message string `json:"message"`
-		}
-		if json.Unmarshal(thread.Posts[pid], &post) != nil {
-			continue
-		}
-		if post.UserID == br.BotID() {
-			continue
-		}
-		if isOperationalNoticeMessage(post.Message) || isStatusOnlyMessage(post.Message) {
-			continue
-		}
-		return strings.TrimSpace(post.Message)
-	}
-
-	return ""
 }
 
 func isStatusOnlyMessage(content string) bool {

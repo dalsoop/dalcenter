@@ -11,16 +11,13 @@ import (
 	"github.com/dalsoop/dalcenter/internal/daemon"
 	"github.com/dalsoop/dalcenter/internal/localdal"
 	"github.com/dalsoop/dalcenter/internal/paths"
-	"github.com/dalsoop/dalcenter/internal/talk"
 	"github.com/spf13/cobra"
 )
 
 func newRegisterCmd() *cobra.Command {
 	var (
-		mmURL   string
-		mmToken string
-		mmTeam  string
-		port    int
+		bridgeURL string
+		port      int
 	)
 	cmd := &cobra.Command{
 		Use:   "register <repo-path>",
@@ -50,22 +47,13 @@ func newRegisterCmd() *cobra.Command {
 			}
 			addr := fmt.Sprintf(":%d", port)
 			serviceName := systemdServiceName(repoName)
-			if err := installSystemdService(serviceName, repoPath, addr, mmURL, mmToken, mmTeam); err != nil {
+			if err := installSystemdService(serviceName, repoPath, addr, bridgeURL); err != nil {
 				return fmt.Errorf("systemd: %w", err)
 			}
 			fmt.Printf("[2/6] systemd service: %s (port %d)\n", serviceName, port)
 
-			// Step 3: MM 채널 설정
-			if mmURL != "" && mmToken != "" && mmTeam != "" {
-				teamID, channelID, err := talk.GetTeamAndChannel(mmURL, mmToken, mmTeam, repoName)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "[3/6] warning: MM channel setup: %v\n", err)
-				} else {
-					fmt.Printf("[3/6] MM channel: %s (team=%s channel=%s)\n", repoName, teamID[:8], channelID[:8])
-				}
-			} else {
-				fmt.Println("[3/6] MM channel: skipped (no MM config)")
-			}
+			// Step 3: bridge URL 확인
+			fmt.Printf("[3/6] bridge URL: %s\n", bridgeURL)
 
 			// Step 4: 토큰 주입
 			if err := injectTokensToService(serviceName, repoPath); err != nil {
@@ -93,11 +81,16 @@ func newRegisterCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&mmURL, "mm-url", os.Getenv("DALCENTER_MM_URL"), "Mattermost URL")
-	cmd.Flags().StringVar(&mmToken, "mm-token", os.Getenv("DALCENTER_MM_TOKEN"), "Mattermost admin token")
-	cmd.Flags().StringVar(&mmTeam, "mm-team", os.Getenv("DALCENTER_MM_TEAM"), "Mattermost team name")
+	cmd.Flags().StringVar(&bridgeURL, "bridge-url", envOrDefault("DALCENTER_BRIDGE_URL", "http://localhost:4242"), "Matterbridge API URL")
 	cmd.Flags().IntVar(&port, "port", 0, "Listen port (default: auto-assign next available)")
 	return cmd
+}
+
+func envOrDefault(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }
 
 // systemdServiceName returns the systemd service name for a project.
@@ -154,20 +147,14 @@ func nextAvailablePort() int {
 }
 
 // installSystemdService writes and enables a dalcenter systemd service file.
-func installSystemdService(serviceName, repoPath, addr, mmURL, mmToken, mmTeam string) error {
+func installSystemdService(serviceName, repoPath, addr, bridgeURL string) error {
 	repoName := filepath.Base(repoPath)
 	unitPath := filepath.Join("/etc/systemd/system", serviceName+".service")
 
 	// Build ExecStart
 	execStart := fmt.Sprintf("%s serve --addr %s --repo %s", paths.BinaryPath(), addr, repoPath)
-	if mmURL != "" {
-		execStart += fmt.Sprintf(" --mm-url %s", mmURL)
-	}
-	if mmToken != "" {
-		execStart += fmt.Sprintf(" --mm-token %s", mmToken)
-	}
-	if mmTeam != "" {
-		execStart += fmt.Sprintf(" --mm-team %s", mmTeam)
+	if bridgeURL != "" {
+		execStart += fmt.Sprintf(" --bridge-url %s", bridgeURL)
 	}
 
 	unit := fmt.Sprintf(`[Unit]
@@ -204,13 +191,9 @@ WantedBy=multi-user.target
 }
 
 func newUnregisterCmd() *cobra.Command {
-	var (
-		mmURL   string
-		mmToken string
-	)
 	cmd := &cobra.Command{
 		Use:   "unregister <repo-path>",
-		Short: "Unregister a repository: sleep all dals, remove systemd service, disable MM bot",
+		Short: "Unregister a repository: sleep all dals, remove systemd service",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repoPath, err := filepath.Abs(args[0])
@@ -224,18 +207,16 @@ func newUnregisterCmd() *cobra.Command {
 			repoName := filepath.Base(repoPath)
 
 			// Step 1: sleep all dals
-			fmt.Println("[1/3] sleeping all dals...")
-			var dalNames []string
+			fmt.Println("[1/2] sleeping all dals...")
 			client, err := daemon.NewClient()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "[1/3] warning: cannot connect to daemon: %v\n", err)
+				fmt.Fprintf(os.Stderr, "[1/2] warning: cannot connect to daemon: %v\n", err)
 			} else {
 				containers, err := client.Ps()
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "[1/3] warning: list containers: %v\n", err)
+					fmt.Fprintf(os.Stderr, "[1/2] warning: list containers: %v\n", err)
 				} else {
 					for _, c := range containers {
-						dalNames = append(dalNames, c.DalName)
 						if _, err := client.Sleep(c.DalName); err != nil {
 							fmt.Fprintf(os.Stderr, "  sleep %s: %v\n", c.DalName, err)
 							continue
@@ -244,10 +225,10 @@ func newUnregisterCmd() *cobra.Command {
 					}
 				}
 			}
-			fmt.Println("[1/3] done")
+			fmt.Println("[1/2] done")
 
 			// Step 2: remove systemd service
-			fmt.Println("[2/3] removing systemd service...")
+			fmt.Println("[2/2] removing systemd service...")
 			serviceName := systemdServiceName(repoName)
 			exec.Command("systemctl", "stop", serviceName).Run()
 			exec.Command("systemctl", "disable", serviceName).Run()
@@ -259,30 +240,12 @@ func newUnregisterCmd() *cobra.Command {
 			os.RemoveAll(dropInDir)
 
 			exec.Command("systemctl", "daemon-reload").Run()
-			fmt.Printf("[2/3] removed: %s\n", serviceName)
-
-			// Step 3: disable MM bots
-			if mmURL != "" && mmToken != "" {
-				fmt.Println("[3/3] disabling MM bots...")
-				for _, name := range dalNames {
-					botUsername := "dal-" + name
-					if err := talk.TeardownBot(mmURL, mmToken, botUsername); err != nil {
-						fmt.Fprintf(os.Stderr, "  teardown %s: %v\n", botUsername, err)
-						continue
-					}
-					fmt.Printf("  teardown: %s\n", botUsername)
-				}
-				fmt.Println("[3/3] done")
-			} else {
-				fmt.Println("[3/3] MM bot: skipped (no MM config)")
-			}
+			fmt.Printf("[2/2] removed: %s\n", serviceName)
 
 			fmt.Printf("\nunregistered: %s\n", repoName)
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&mmURL, "mm-url", os.Getenv("DALCENTER_MM_URL"), "Mattermost URL")
-	cmd.Flags().StringVar(&mmToken, "mm-token", os.Getenv("DALCENTER_MM_TOKEN"), "Mattermost admin token")
 	return cmd
 }
 
