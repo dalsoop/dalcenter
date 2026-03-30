@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,9 +11,18 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
+	sdkclient "github.com/docker/go-sdk/client"
+	sdkcontainer "github.com/docker/go-sdk/container"
+	cexec "github.com/docker/go-sdk/container/exec"
+	apicontainer "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	mobyclient "github.com/moby/moby/client"
+
 	"github.com/dalsoop/dalcenter/internal/localdal"
+	"github.com/dalsoop/dalcenter/internal/paths"
 )
 
 const (
@@ -38,6 +48,22 @@ const (
 	// defaultLogTail is the default number of log lines to return.
 	defaultLogTail = "100"
 )
+
+// dockerClient is the package-level Docker SDK client, lazily initialized.
+var (
+	dockerClient     sdkclient.SDKClient
+	dockerClientOnce sync.Once
+	dockerClientErr  error
+)
+
+// getDockerClient returns the shared Docker SDK client, creating it on first use.
+func getDockerClient() (sdkclient.SDKClient, error) {
+	dockerClientOnce.Do(func() {
+		ctx := context.Background()
+		dockerClient, dockerClientErr = sdkclient.New(ctx)
+	})
+	return dockerClient, dockerClientErr
+}
 
 // isCredentialExpired checks if a player's credential file has expired.
 // Supports Claude (.credentials.json) and Codex (auth.json).
@@ -135,13 +161,18 @@ func credentialPlayers(dal *localdal.DalProfile) []string {
 	return players
 }
 
-func appendCredentialMounts(args []string, hostHome string, players []string, warnings *[]string) []string {
+func appendCredentialMounts(mounts []mount.Mount, hostHome string, players []string, warnings *[]string) []mount.Mount {
 	for _, player := range players {
 		switch player {
 		case "claude":
 			credPath := filepath.Join(hostHome, ".claude", ".credentials.json")
 			if _, err := os.Stat(credPath); err == nil {
-				args = append(args, "-v", fmt.Sprintf("%s:%s/.credentials.json:ro", credPath, playerHome("claude")))
+				mounts = append(mounts, mount.Mount{
+					Type:     mount.TypeBind,
+					Source:   credPath,
+					Target:   playerHome("claude") + "/.credentials.json",
+					ReadOnly: true,
+				})
 				if expired, _ := isCredentialExpired(credPath); expired {
 					w := "Claude credential expired — run: pve-sync-creds"
 					log.Printf("WARNING: %s", w)
@@ -155,7 +186,12 @@ func appendCredentialMounts(args []string, hostHome string, players []string, wa
 		case "codex":
 			credPath := filepath.Join(hostHome, ".codex", "auth.json")
 			if _, err := os.Stat(credPath); err == nil {
-				args = append(args, "-v", fmt.Sprintf("%s:%s/auth.json:ro", credPath, playerHome("codex")))
+				mounts = append(mounts, mount.Mount{
+					Type:     mount.TypeBind,
+					Source:   credPath,
+					Target:   playerHome("codex") + "/auth.json",
+					ReadOnly: true,
+				})
 				if expired, _ := isCredentialExpired(credPath); expired {
 					w := "Codex credential expired — run: pve-sync-creds"
 					log.Printf("WARNING: %s", w)
@@ -168,7 +204,7 @@ func appendCredentialMounts(args []string, hostHome string, players []string, wa
 			}
 		}
 	}
-	return args
+	return mounts
 }
 
 // bridgeURLForContainer rewrites localhost URLs to host.docker.internal
@@ -183,6 +219,13 @@ func bridgeURLForContainer(bridgeURL string) string {
 // It returns the container ID, any credential warnings, and an error.
 func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr, bridgeURL string, dal *localdal.DalProfile) (string, []string, error) {
 	var warnings []string
+	ctx := context.Background()
+
+	cli, err := getDockerClient()
+	if err != nil {
+		return "", nil, fmt.Errorf("docker client: %w", err)
+	}
+
 	containerName := dalContainerName(instanceName, dal.UUID)
 	tag := "latest"
 	if dal.PlayerVersion != "" {
@@ -195,59 +238,64 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr, bridgeURL st
 	home := playerHome(dal.Player)
 	hostHome, _ := os.UserHomeDir()
 
-	args := []string{
-		"run", "-d",
-		"--name", containerName,
-		"--hostname", dal.Name,
-		// Docker label for UUID-based filtering in reconcile
-		"--label", "dalcenter.uuid=" + dal.UUID,
-		// Linux Docker: host.docker.internal is not available by default.
-		// Add it explicitly pointing to the Docker bridge gateway.
-		"--add-host", dockerHostAlias + ":host-gateway",
-		// Environment
-		"-e", fmt.Sprintf("DAL_NAME=%s", dal.Name),
-		"-e", fmt.Sprintf("DAL_UUID_SHORT=%s", uuidShort(dal.UUID)),
-		"-e", fmt.Sprintf("DAL_UUID=%s", dal.UUID),
-		"-e", fmt.Sprintf("DAL_ROLE=%s", dal.Role),
-		"-e", fmt.Sprintf("DAL_PLAYER=%s", dal.Player),
+	// Build environment variables
+	envMap := map[string]string{
+		"DAL_NAME":               dal.Name,
+		"DAL_UUID_SHORT":         uuidShort(dal.UUID),
+		"DAL_UUID":               dal.UUID,
+		"DAL_ROLE":               dal.Role,
+		"DAL_PLAYER":             dal.Player,
+		"DALCENTER_URL":          fmt.Sprintf("http://%s%s", dockerHostAlias, daemonAddr),
+		"DALCENTER_BRIDGE_URL":   bridgeURLForContainer(bridgeURL),
+		"VEILKEY_LOCALVAULT_URL": os.Getenv("VEILKEY_LOCALVAULT_URL"),
 	}
 	if shouldDisableContainerDM(dal) {
-		args = append(args, "-e", "DAL_NO_DM=1")
+		envMap["DAL_NO_DM"] = "1"
 	}
 	if dal.Model != "" {
-		args = append(args, "-e", fmt.Sprintf("DAL_MODEL=%s", dal.Model))
+		envMap["DAL_MODEL"] = dal.Model
 	}
 	if dal.FallbackPlayer != "" {
-		args = append(args, "-e", fmt.Sprintf("DAL_FALLBACK_PLAYER=%s", dal.FallbackPlayer))
+		envMap["DAL_FALLBACK_PLAYER"] = dal.FallbackPlayer
 	}
-	args = append(args,
-		"-e", fmt.Sprintf("DALCENTER_URL=http://%s%s", dockerHostAlias, daemonAddr),
-		"-e", fmt.Sprintf("DALCENTER_BRIDGE_URL=%s", bridgeURLForContainer(bridgeURL)),
-		// VeilKey — pass through if available
-		"-e", fmt.Sprintf("VEILKEY_LOCALVAULT_URL=%s", os.Getenv("VEILKEY_LOCALVAULT_URL")),
-		// Mount dal directory (read-only)
-		"-v", fmt.Sprintf("%s:%s:ro", dalDir, containerDalDir),
-		// Working directory
-		"-w", containerWorkDir,
-	)
 	if externalURL := strings.TrimSpace(os.Getenv("DALCENTER_EXTERNAL_URL")); externalURL != "" {
-		args = append(args, "-e", fmt.Sprintf("DALCENTER_EXTERNAL_URL=%s", externalURL))
+		envMap["DALCENTER_EXTERNAL_URL"] = externalURL
 	}
+
+	// Build bind mounts
+	var bindMounts []mount.Mount
+
+	// Dal directory (read-only)
+	bindMounts = append(bindMounts, mount.Mount{
+		Type:     mount.TypeBind,
+		Source:   dalDir,
+		Target:   containerDalDir,
+		ReadOnly: true,
+	})
 
 	// Mount service repo as workspace (shared mode) or leave empty for clone mode
 	isCloneMode := dal.Workspace == "clone"
 	if serviceRepo != "" && !isCloneMode {
-		args = append(args, "-v", fmt.Sprintf("%s:%s", serviceRepo, containerWorkDir))
-		// .dal/ ro overlay — member가 .dal/ 우회 수정 방지 (Docker 후순위 mount가 이김)
-		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", localdalRoot, filepath.Join(containerWorkDir, ".dal")))
+		bindMounts = append(bindMounts, mount.Mount{
+			Type:   mount.TypeBind,
+			Source: serviceRepo,
+			Target: containerWorkDir,
+		})
+		// .dal/ ro overlay — member cannot bypass-modify .dal/ (Docker later mount wins)
+		bindMounts = append(bindMounts, mount.Mount{
+			Type:     mount.TypeBind,
+			Source:   localdalRoot,
+			Target:   filepath.Join(containerWorkDir, ".dal"),
+			ReadOnly: true,
+		})
 	}
 
 	// Mount credentials for primary + fallback players.
-	args = appendCredentialMounts(args, hostHome, credentialPlayers(dal), &warnings)
+	bindMounts = appendCredentialMounts(bindMounts, hostHome, credentialPlayers(dal), &warnings)
 
+	// Player-specific env
 	switch dal.Player {
 	case "gemini":
-		// Gemini uses API key — resolve from dal.cue (VK:/env:), fallback to host env
 		key := dal.GeminiAPIKey
 		if key != "" {
 			if strings.HasPrefix(key, "VK:") {
@@ -266,7 +314,7 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr, bridgeURL st
 			key = os.Getenv("GEMINI_API_KEY")
 		}
 		if key != "" {
-			args = append(args, "-e", fmt.Sprintf("GEMINI_API_KEY=%s", key))
+			envMap["GEMINI_API_KEY"] = key
 		} else {
 			w := "GEMINI_API_KEY not set for gemini dal"
 			log.Printf("WARNING: %s", w)
@@ -287,7 +335,12 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr, bridgeURL st
 			skillName := entry.Name()
 			skillPath := filepath.Join(sharedSkillsDir, skillName)
 			targetPath := filepath.Join(home, "skills", skillName)
-			args = append(args, "-v", fmt.Sprintf("%s:%s:ro", skillPath, targetPath))
+			bindMounts = append(bindMounts, mount.Mount{
+				Type:     mount.TypeBind,
+				Source:   skillPath,
+				Target:   targetPath,
+				ReadOnly: true,
+			})
 			mountedSkills[skillName] = true
 		}
 	}
@@ -300,13 +353,16 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr, bridgeURL st
 		}
 		skillPath := filepath.Join(tplRoot, skill)
 		targetPath := filepath.Join(home, "skills", skillBase)
-		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", skillPath, targetPath))
+		bindMounts = append(bindMounts, mount.Mount{
+			Type:     mount.TypeBind,
+			Source:   skillPath,
+			Target:   targetPath,
+			ReadOnly: true,
+		})
 		mountedSkills[skillBase] = true
 	}
 
 	// Mount charter.md as the right filename (e.g. CLAUDE.md, AGENTS.md, GEMINI.md).
-	// The source file MUST exist before docker run; otherwise Docker creates the
-	// mount-point as an empty directory instead of a file (GitHub #499).
 	instrSrc := filepath.Join(dalDir, "charter.md")
 	instrDst := filepath.Join(home, instructionsFileName(dal.Player))
 	if info, err := os.Stat(instrSrc); err != nil {
@@ -318,17 +374,26 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr, bridgeURL st
 		log.Printf("WARNING: %s", w)
 		warnings = append(warnings, w)
 	} else {
-		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", instrSrc, instrDst))
+		bindMounts = append(bindMounts, mount.Mount{
+			Type:     mount.TypeBind,
+			Source:   instrSrc,
+			Target:   instrDst,
+			ReadOnly: true,
+		})
 	}
 
-	// Mount decisions.md as shared team memory (read-only — scribe commits changes)
-	// Check template root first, fall back to dal root (legacy)
+	// Mount decisions.md as shared team memory (read-only)
 	decisionsPath := filepath.Join(tplRoot, "decisions.md")
 	if _, err := os.Stat(decisionsPath); err != nil {
 		decisionsPath = filepath.Join(localdalRoot, "decisions.md")
 	}
 	if _, err := os.Stat(decisionsPath); err == nil {
-		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", decisionsPath, filepath.Join(containerWorkDir, "decisions.md")))
+		bindMounts = append(bindMounts, mount.Mount{
+			Type:     mount.TypeBind,
+			Source:   decisionsPath,
+			Target:   filepath.Join(containerWorkDir, "decisions.md"),
+			ReadOnly: true,
+		})
 	}
 
 	// Mount decisions-archive.md (read-only for all)
@@ -337,17 +402,23 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr, bridgeURL st
 		archivePath = filepath.Join(localdalRoot, "decisions-archive.md")
 	}
 	if _, err := os.Stat(archivePath); err == nil {
-		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", archivePath, filepath.Join(containerWorkDir, "decisions-archive.md")))
+		bindMounts = append(bindMounts, mount.Mount{
+			Type:     mount.TypeBind,
+			Source:   archivePath,
+			Target:   filepath.Join(containerWorkDir, "decisions-archive.md"),
+			ReadOnly: true,
+		})
 	}
 
-	// Mount decisions inbox — rw for member (drop proposals), ro for leader
+	// Mount decisions inbox — rw for member, ro for leader
 	inboxPath := inboxDir(serviceRepo)
 	inboxContainerPath := filepath.Join(containerWorkDir, "decisions", "inbox")
-	if dal.Role == "member" {
-		args = append(args, "-v", fmt.Sprintf("%s:%s", inboxPath, inboxContainerPath))
-	} else {
-		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", inboxPath, inboxContainerPath))
-	}
+	bindMounts = append(bindMounts, mount.Mount{
+		Type:     mount.TypeBind,
+		Source:   inboxPath,
+		Target:   inboxContainerPath,
+		ReadOnly: dal.Role != "member",
+	})
 
 	// Mount wisdom.md (read-only for all)
 	wisdomPath := filepath.Join(tplRoot, "wisdom.md")
@@ -355,45 +426,57 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr, bridgeURL st
 		wisdomPath = filepath.Join(localdalRoot, "wisdom.md")
 	}
 	if _, err := os.Stat(wisdomPath); err == nil {
-		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", wisdomPath, filepath.Join(containerWorkDir, "wisdom.md")))
+		bindMounts = append(bindMounts, mount.Mount{
+			Type:     mount.TypeBind,
+			Source:   wisdomPath,
+			Target:   filepath.Join(containerWorkDir, "wisdom.md"),
+			ReadOnly: true,
+		})
 	}
 
 	// Mount now.md from state dir (read-only for member, read-write for leader)
 	nowFile := filepath.Join(stateDir(serviceRepo), "now.md")
-	// Create now.md if it doesn't exist
 	if _, err := os.Stat(nowFile); err != nil {
 		os.WriteFile(nowFile, []byte("# Now\n"), 0644)
 	}
-	if dal.Role == "leader" {
-		args = append(args, "-v", fmt.Sprintf("%s:%s", nowFile, filepath.Join(containerWorkDir, "now.md")))
-	} else {
-		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", nowFile, filepath.Join(containerWorkDir, "now.md")))
-	}
+	bindMounts = append(bindMounts, mount.Mount{
+		Type:     mount.TypeBind,
+		Source:   nowFile,
+		Target:   filepath.Join(containerWorkDir, "now.md"),
+		ReadOnly: dal.Role != "leader",
+	})
 
-	// Mount history-buffer — rw for member (append session records), ro for leader
+	// Mount history-buffer — rw for member, ro for leader
 	histBufPath := filepath.Join(stateDir(serviceRepo), "history-buffer")
 	os.MkdirAll(histBufPath, 0755)
-	if dal.Role == "member" {
-		args = append(args, "-v", fmt.Sprintf("%s:%s", histBufPath, filepath.Join(containerWorkDir, "history-buffer")))
-	} else {
-		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", histBufPath, filepath.Join(containerWorkDir, "history-buffer")))
-	}
+	bindMounts = append(bindMounts, mount.Mount{
+		Type:     mount.TypeBind,
+		Source:   histBufPath,
+		Target:   filepath.Join(containerWorkDir, "history-buffer"),
+		ReadOnly: dal.Role != "member",
+	})
 
-	// Mount wisdom/inbox — rw for member (drop proposals), ro for leader
+	// Mount wisdom/inbox — rw for member, ro for leader
 	wisdomInbox := filepath.Join(stateDir(serviceRepo), "wisdom", "inbox")
 	os.MkdirAll(wisdomInbox, 0755)
-	if dal.Role == "member" {
-		args = append(args, "-v", fmt.Sprintf("%s:%s", wisdomInbox, filepath.Join(containerWorkDir, "wisdom-inbox")))
-	} else {
-		args = append(args, "-v", fmt.Sprintf("%s:%s:ro", wisdomInbox, filepath.Join(containerWorkDir, "wisdom-inbox")))
-	}
+	bindMounts = append(bindMounts, mount.Mount{
+		Type:     mount.TypeBind,
+		Source:   wisdomInbox,
+		Target:   filepath.Join(containerWorkDir, "wisdom-inbox"),
+		ReadOnly: dal.Role != "member",
+	})
 
 	// Inject Claude Code settings.json for autoApprove (dal runs unattended)
 	if dal.Player == "claude" {
 		settingsJSON := `{"permissions":{"allow":["Bash(*)","Edit(*)","Write(*)","Read(*)","Glob(*)","Grep(*)","WebFetch(*)","WebSearch","Agent(*)"],"defaultMode":"autoApprove"}}`
 		settingsPath := filepath.Join(os.TempDir(), fmt.Sprintf("dal-settings-%s.json", containerName))
 		if err := os.WriteFile(settingsPath, []byte(settingsJSON), 0644); err == nil {
-			args = append(args, "-v", fmt.Sprintf("%s:%s:ro", settingsPath, filepath.Join(home, ".claude", "settings.json")))
+			bindMounts = append(bindMounts, mount.Mount{
+				Type:     mount.TypeBind,
+				Source:   settingsPath,
+				Target:   filepath.Join(home, ".claude", "settings.json"),
+				ReadOnly: true,
+			})
 		}
 	}
 
@@ -406,15 +489,14 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr, bridgeURL st
 	if gitEmail == "" {
 		gitEmail = fmt.Sprintf("%s%s-%s@%s", containerBasePrefix, dal.Name, uuidShort(dal.UUID), defaultGitEmailDomain)
 	}
-	args = append(args, "-e", fmt.Sprintf("GIT_AUTHOR_NAME=%s", gitUser))
-	args = append(args, "-e", fmt.Sprintf("GIT_AUTHOR_EMAIL=%s", gitEmail))
-	args = append(args, "-e", fmt.Sprintf("GIT_COMMITTER_NAME=%s", gitUser))
-	args = append(args, "-e", fmt.Sprintf("GIT_COMMITTER_EMAIL=%s", gitEmail))
+	envMap["GIT_AUTHOR_NAME"] = gitUser
+	envMap["GIT_AUTHOR_EMAIL"] = gitEmail
+	envMap["GIT_COMMITTER_NAME"] = gitUser
+	envMap["GIT_COMMITTER_EMAIL"] = gitEmail
 
 	// GitHub token for git push + gh CLI
 	if dal.GitHubToken != "" {
 		token := dal.GitHubToken
-		// Resolve references
 		if strings.HasPrefix(token, "VK:") {
 			resolved, err := resolveVeilKey(token)
 			if err != nil {
@@ -427,41 +509,56 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr, bridgeURL st
 			token = os.Getenv(envName)
 		}
 		if token != "" && !strings.HasPrefix(token, "VK:") && !strings.HasPrefix(token, "env:") {
-			args = append(args, "-e", fmt.Sprintf("GITHUB_TOKEN=%s", token))
-			args = append(args, "-e", fmt.Sprintf("GH_TOKEN=%s", token))
+			envMap["GITHUB_TOKEN"] = token
+			envMap["GH_TOKEN"] = token
 		}
 	}
 
-	// Extra bash tools: unrestricted for leader (needs dalcli-leader, git, etc.)
-	// and for special images like "go", "rust" (needs build tools).
+	// Extra bash tools: unrestricted for leader and special images
 	if dal.Role == "leader" || dal.PlayerVersion == "go" || dal.PlayerVersion == "rust" {
-		args = append(args, "-e", "DAL_EXTRA_BASH=*")
+		envMap["DAL_EXTRA_BASH"] = "*"
+	}
+
+	// DAL_MAX_DURATION — pass through from host env
+	if maxDur := os.Getenv("DAL_MAX_DURATION"); maxDur != "" {
+		envMap["DAL_MAX_DURATION"] = maxDur
 	}
 
 	// Auto task: periodic self-execution
-	// DAL_MAX_DURATION — 호스트 환경변수에서 전달
-	if maxDur := os.Getenv("DAL_MAX_DURATION"); maxDur != "" {
-		args = append(args, "-e", fmt.Sprintf("DAL_MAX_DURATION=%s", maxDur))
-	}
-
 	if dal.AutoTask != "" {
-		args = append(args, "-e", fmt.Sprintf("DAL_AUTO_TASK=%s", dal.AutoTask))
+		envMap["DAL_AUTO_TASK"] = dal.AutoTask
 		if dal.AutoInterval != "" {
-			args = append(args, "-e", fmt.Sprintf("DAL_AUTO_INTERVAL=%s", dal.AutoInterval))
+			envMap["DAL_AUTO_INTERVAL"] = dal.AutoInterval
 		}
 	}
 
-	args = append(args, image)
-
-	cmd := exec.Command("docker", args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", nil, fmt.Errorf("docker run: %s: %w", strings.TrimSpace(string(out)), err)
+	// Build container options
+	opts := []sdkcontainer.ContainerCustomizer{
+		sdkcontainer.WithClient(cli),
+		sdkcontainer.WithImage(image),
+		sdkcontainer.WithName(containerName),
+		sdkcontainer.WithEnv(envMap),
+		sdkcontainer.WithLabels(map[string]string{
+			"dalcenter.uuid": dal.UUID,
+		}),
+		sdkcontainer.WithConfigModifier(func(cfg *apicontainer.Config) {
+			cfg.Hostname = dal.Name
+			cfg.WorkingDir = containerWorkDir
+		}),
+		sdkcontainer.WithHostConfigModifier(func(hc *apicontainer.HostConfig) {
+			hc.ExtraHosts = append(hc.ExtraHosts, dockerHostAlias+":host-gateway")
+			hc.Mounts = append(hc.Mounts, bindMounts...)
+		}),
 	}
-	containerID := strings.TrimSpace(string(out))
+
+	ctr, err := sdkcontainer.Run(ctx, opts...)
+	if err != nil {
+		return "", nil, fmt.Errorf("docker run: %w", err)
+	}
+	containerID := ctr.ID()
 
 	// Inject dalcli / dalcli-leader based on role
-	if err := injectCli(containerID, dal.Role); err != nil {
+	if err := injectCli(ctx, ctr, dal.Role); err != nil {
 		log.Printf("[docker] warning: failed to inject dalcli: %v", err)
 	}
 
@@ -469,7 +566,7 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr, bridgeURL st
 	if isCloneMode && serviceRepo != "" {
 		repoURL := detectRepoURL(serviceRepo)
 		if repoURL != "" {
-			if err := cloneRepoInContainer(containerID, repoURL); err != nil {
+			if err := cloneRepoInContainer(ctx, ctr, repoURL); err != nil {
 				w := fmt.Sprintf("workspace clone failed: %v (falling back to empty workspace)", err)
 				log.Printf("[docker] %s", w)
 				warnings = append(warnings, w)
@@ -497,9 +594,7 @@ func detectRepoURL(repoPath string) string {
 }
 
 // cloneRepoInContainer runs git clone inside a running container.
-func cloneRepoInContainer(containerID, repoURL string) error {
-	// Clone into a temp dir, then move contents to /workspace
-	// (container may already have /workspace as WORKDIR)
+func cloneRepoInContainer(ctx context.Context, ctr *sdkcontainer.Container, repoURL string) error {
 	script := fmt.Sprintf(
 		`git clone --depth=50 %s /tmp/_clone && `+
 			`cp -a /tmp/_clone/. /workspace/ && `+
@@ -507,10 +602,13 @@ func cloneRepoInContainer(containerID, repoURL string) error {
 			`cd /workspace && git checkout main 2>/dev/null; true`,
 		repoURL,
 	)
-	cmd := exec.Command("docker", "exec", containerID, "bash", "-c", script)
-	out, err := cmd.CombinedOutput()
+	exitCode, output, err := ctr.Exec(ctx, []string{"bash", "-c", script}, cexec.Multiplexed())
 	if err != nil {
-		return fmt.Errorf("%s: %w", strings.TrimSpace(string(out)), err)
+		return fmt.Errorf("exec: %w", err)
+	}
+	if exitCode != 0 {
+		out, _ := io.ReadAll(output)
+		return fmt.Errorf("exit %d: %s", exitCode, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
@@ -552,9 +650,9 @@ func resolveVeilKey(ref string) (string, error) {
 	return strings.TrimSpace(string(body)), nil
 }
 
-// injectCli copies dalcli or dalcli-leader binary into the container.
-func injectCli(containerID, role string) error {
-	// Find binaries next to dalcenter binary
+// injectCli copies dalcli or dalcli-leader binary into the container,
+// and injects the settings.json from the host config dir.
+func injectCli(ctx context.Context, ctr *sdkcontainer.Container, role string) error {
 	self, err := os.Executable()
 	if err != nil {
 		return err
@@ -564,9 +662,12 @@ func injectCli(containerID, role string) error {
 	// Always inject dalcli
 	dalcliPath := filepath.Join(binDir, "dalcli")
 	if _, err := os.Stat(dalcliPath); err == nil {
-		cp := exec.Command("docker", "cp", dalcliPath, containerID+":/usr/local/bin/dalcli")
-		if out, err := cp.CombinedOutput(); err != nil {
-			return fmt.Errorf("inject dalcli: %s: %w", strings.TrimSpace(string(out)), err)
+		data, err := os.ReadFile(dalcliPath)
+		if err != nil {
+			return fmt.Errorf("read dalcli: %w", err)
+		}
+		if err := ctr.CopyToContainer(ctx, data, "/usr/local/bin/dalcli", 0755); err != nil {
+			return fmt.Errorf("inject dalcli: %w", err)
 		}
 	}
 
@@ -574,9 +675,25 @@ func injectCli(containerID, role string) error {
 	if role == "leader" {
 		leaderPath := filepath.Join(binDir, "dalcli-leader")
 		if _, err := os.Stat(leaderPath); err == nil {
-			cp := exec.Command("docker", "cp", leaderPath, containerID+":/usr/local/bin/dalcli-leader")
-			if out, err := cp.CombinedOutput(); err != nil {
-				return fmt.Errorf("inject dalcli-leader: %s: %w", strings.TrimSpace(string(out)), err)
+			data, err := os.ReadFile(leaderPath)
+			if err != nil {
+				return fmt.Errorf("read dalcli-leader: %w", err)
+			}
+			if err := ctr.CopyToContainer(ctx, data, "/usr/local/bin/dalcli-leader", 0755); err != nil {
+				return fmt.Errorf("inject dalcli-leader: %w", err)
+			}
+		}
+	}
+
+	// Inject Claude settings.json if available (auto-approve for autonomous operation)
+	settingsPath := filepath.Join(paths.ConfigDir(), "settings.json")
+	if _, err := os.Stat(settingsPath); err == nil {
+		data, err := os.ReadFile(settingsPath)
+		if err != nil {
+			log.Printf("[inject] settings.json read failed: %v", err)
+		} else {
+			if err := ctr.CopyToContainer(ctx, data, "/root/.claude/settings.json", 0644); err != nil {
+				log.Printf("[inject] settings.json copy failed: %v", err)
 			}
 		}
 	}
@@ -591,6 +708,19 @@ func injectCli(containerID, role string) error {
 // Returns warnings for non-fatal failures.
 func setupWorkspace(containerID string, dal *localdal.DalProfile, issueID string) []string {
 	var warnings []string
+	ctx := context.Background()
+
+	cli, err := getDockerClient()
+	if err != nil {
+		warnings = append(warnings, fmt.Sprintf("docker client: %v", err))
+		return warnings
+	}
+
+	ctr, err := sdkcontainer.FromID(ctx, cli, containerID)
+	if err != nil {
+		warnings = append(warnings, fmt.Sprintf("container from ID: %v", err))
+		return warnings
+	}
 
 	// 1. Branch checkout: issue-{N}/{dal-name}
 	if issueID != "" {
@@ -600,81 +730,81 @@ func setupWorkspace(containerID string, dal *localdal.DalProfile, issueID string
 			base = "main"
 		}
 		// Verify base branch exists; fallback to HEAD if not
-		verifyBase := exec.Command("docker", "exec", containerID,
-			"git", "-C", "/workspace", "rev-parse", "--verify", base)
-		if _, err := verifyBase.CombinedOutput(); err != nil {
+		exitCode, _, _ := ctr.Exec(ctx, []string{"git", "-C", "/workspace", "rev-parse", "--verify", base}, cexec.Multiplexed())
+		if exitCode != 0 {
 			log.Printf("[setup] base branch %q not found, using HEAD", base)
 			base = "HEAD"
 		}
 
-		// Try to checkout existing branch first, then create new
-		checkout := exec.Command("docker", "exec", containerID,
-			"git", "-C", "/workspace", "checkout", "-b", branchName, base)
-		if out, err := checkout.CombinedOutput(); err != nil {
-			// Branch might already exist — try just checkout
-			checkout2 := exec.Command("docker", "exec", containerID,
-				"git", "-C", "/workspace", "checkout", branchName)
-			if out2, err2 := checkout2.CombinedOutput(); err2 != nil {
-				warnings = append(warnings, fmt.Sprintf("branch checkout failed: %s / %s", strings.TrimSpace(string(out)), strings.TrimSpace(string(out2))))
+		// Try to create new branch first, then checkout existing
+		exitCode, output, _ := ctr.Exec(ctx, []string{"git", "-C", "/workspace", "checkout", "-b", branchName, base}, cexec.Multiplexed())
+		if exitCode != 0 {
+			out1, _ := io.ReadAll(output)
+			exitCode2, output2, _ := ctr.Exec(ctx, []string{"git", "-C", "/workspace", "checkout", branchName}, cexec.Multiplexed())
+			if exitCode2 != 0 {
+				out2, _ := io.ReadAll(output2)
+				warnings = append(warnings, fmt.Sprintf("branch checkout failed: %s / %s", strings.TrimSpace(string(out1)), strings.TrimSpace(string(out2))))
 			} else {
 				log.Printf("[setup] checked out existing branch %s", branchName)
 			}
 		} else {
 			log.Printf("[setup] created branch %s from %s", branchName, base)
-			_ = out
 		}
 	}
 
 	// 2. Package installation
 	if len(dal.Setup.Packages) > 0 {
-		aptArgs := append([]string{"exec", containerID, "apt-get", "update", "-qq", "&&", "apt-get", "install", "-y", "-qq"}, dal.Setup.Packages...)
-		// Use bash -c for the compound command
 		shellCmd := "apt-get update -qq && apt-get install -y -qq " + strings.Join(dal.Setup.Packages, " ")
-		install := exec.Command("docker", "exec", containerID, "bash", "-c", shellCmd)
-		if out, err := install.CombinedOutput(); err != nil {
+		exitCode, output, _ := ctr.Exec(ctx, []string{"bash", "-c", shellCmd}, cexec.Multiplexed())
+		if exitCode != 0 {
+			out, _ := io.ReadAll(output)
 			warnings = append(warnings, fmt.Sprintf("package install failed: %s", strings.TrimSpace(string(out))))
 		} else {
 			log.Printf("[setup] installed packages: %v", dal.Setup.Packages)
 		}
-		_ = aptArgs
 	}
 
 	// 3. Setup commands (with 1 retry on failure)
 	for _, cmd := range dal.Setup.Commands {
-		setupCmd := exec.Command("docker", "exec", "-w", "/workspace", containerID, "bash", "-c", cmd)
-		if out, err := setupCmd.CombinedOutput(); err != nil {
+		exitCode, output, _ := ctr.Exec(ctx, []string{"bash", "-c", cmd}, cexec.Multiplexed(), cexec.WithWorkingDir("/workspace"))
+		if exitCode != 0 {
 			log.Printf("[setup] command failed (retrying): %s", cmd)
-			// Retry once
-			retry := exec.Command("docker", "exec", "-w", "/workspace", containerID, "bash", "-c", cmd)
-			if out2, err2 := retry.CombinedOutput(); err2 != nil {
-				warnings = append(warnings, fmt.Sprintf("setup command failed after retry: %q: %s", cmd, strings.TrimSpace(string(out2))))
+			exitCode2, output2, _ := ctr.Exec(ctx, []string{"bash", "-c", cmd}, cexec.Multiplexed(), cexec.WithWorkingDir("/workspace"))
+			if exitCode2 != 0 {
+				out, _ := io.ReadAll(output2)
+				warnings = append(warnings, fmt.Sprintf("setup command failed after retry: %q: %s", cmd, strings.TrimSpace(string(out))))
 			} else {
 				log.Printf("[setup] command succeeded on retry: %s", cmd)
-				_ = out2
 			}
-			_ = out
+			_ = output
 		} else {
 			log.Printf("[setup] command: %s", cmd)
-			_ = out
 		}
 	}
-
-	// 4. Quorum setup (if available)
 
 	return warnings
 }
 
 // dockerStop stops and removes a Docker container.
 func dockerStop(containerID string) error {
+	ctx := context.Background()
+	cli, err := getDockerClient()
+	if err != nil {
+		return fmt.Errorf("docker client: %w", err)
+	}
+
+	ctr, err := sdkcontainer.FromID(ctx, cli, containerID)
+	if err != nil {
+		return fmt.Errorf("container from ID: %w", err)
+	}
+
 	// Stop
-	stop := exec.Command("docker", "stop", containerID)
-	if out, err := stop.CombinedOutput(); err != nil {
-		return fmt.Errorf("docker stop: %s: %w", strings.TrimSpace(string(out)), err)
+	if err := ctr.Stop(ctx); err != nil {
+		return fmt.Errorf("docker stop: %w", err)
 	}
 	// Remove
-	rm := exec.Command("docker", "rm", containerID)
-	if out, err := rm.CombinedOutput(); err != nil {
-		return fmt.Errorf("docker rm: %s: %w", strings.TrimSpace(string(out)), err)
+	if err := ctr.Terminate(ctx); err != nil {
+		return fmt.Errorf("docker rm: %w", err)
 	}
 	return nil
 }
@@ -682,13 +812,23 @@ func dockerStop(containerID string) error {
 // dockerNeedsRestart checks if a container needs to be recreated based on dal.cue changes.
 // Returns a reason string if restart is needed, empty string if not.
 func dockerNeedsRestart(localdalRoot, containerID string, dal *localdal.DalProfile) (string, error) {
-	// 1. Check image: compare current container image with expected
-	imgCmd := exec.Command("docker", "inspect", containerID, "--format", "{{.Config.Image}}")
-	imgOut, err := imgCmd.Output()
+	ctx := context.Background()
+	cli, err := getDockerClient()
 	if err != nil {
-		return "", fmt.Errorf("docker inspect image: %w", err)
+		return "", fmt.Errorf("docker client: %w", err)
 	}
-	currentImage := strings.TrimSpace(string(imgOut))
+
+	ctr, err := sdkcontainer.FromID(ctx, cli, containerID)
+	if err != nil {
+		return "", fmt.Errorf("container from ID: %w", err)
+	}
+
+	// 1. Check image: compare current container image with expected
+	inspectResult, err := ctr.Inspect(ctx)
+	if err != nil {
+		return "", fmt.Errorf("docker inspect: %w", err)
+	}
+	currentImage := inspectResult.Container.Config.Image
 
 	tag := "latest"
 	if dal.PlayerVersion != "" {
@@ -701,26 +841,10 @@ func dockerNeedsRestart(localdalRoot, containerID string, dal *localdal.DalProfi
 	}
 
 	// 2. Check skill mounts: shared skills from .dal/skills/ + per-dal skills
-	mountsCmd := exec.Command("docker", "inspect", containerID, "--format", "{{json .Mounts}}")
-	mountsOut, err := mountsCmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("docker inspect mounts: %w", err)
-	}
-
-	var mounts []struct {
-		Type        string `json:"Type"`
-		Source      string `json:"Source"`
-		Destination string `json:"Destination"`
-	}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(string(mountsOut))), &mounts); err != nil {
-		return "", fmt.Errorf("parse mounts: %w", err)
-	}
-
-	// Count skill mounts: those targeting <playerHome>/skills/*
 	home := playerHome(dal.Player)
 	skillMountPrefix := home + "/skills/"
 	var skillMountCount int
-	for _, m := range mounts {
+	for _, m := range inspectResult.Container.Mounts {
 		if strings.HasPrefix(m.Destination, skillMountPrefix) {
 			skillMountCount++
 		}
@@ -765,10 +889,25 @@ func dockerSync(localdalRoot, containerID string, dal *localdal.DalProfile) (nee
 
 // dockerLogs returns logs from a Docker container.
 func dockerLogs(containerID string) (string, error) {
-	cmd := exec.Command("docker", "logs", "--tail", defaultLogTail, containerID)
-	out, err := cmd.CombinedOutput()
+	ctx := context.Background()
+	cli, err := getDockerClient()
 	if err != nil {
-		return "", fmt.Errorf("docker logs: %s: %w", strings.TrimSpace(string(out)), err)
+		return "", fmt.Errorf("docker client: %w", err)
+	}
+
+	result, err := cli.ContainerLogs(ctx, containerID, mobyclient.ContainerLogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Tail:       defaultLogTail,
+	})
+	if err != nil {
+		return "", fmt.Errorf("docker logs: %w", err)
+	}
+	defer result.Close()
+
+	out, err := io.ReadAll(result)
+	if err != nil {
+		return "", fmt.Errorf("read logs: %w", err)
 	}
 	return string(out), nil
 }
@@ -780,7 +919,6 @@ type discoveredContainer struct {
 	Running bool
 }
 
-// discoverContainers finds existing dal-* containers (both running and stopped).
 // discoverContainersByUUIDs finds containers matching any of the given UUIDs.
 // Docker --filter label with same key uses AND logic, so we query each UUID separately.
 func discoverContainersByUUIDs(uuids []string) ([]discoveredContainer, error) {
@@ -805,29 +943,34 @@ func discoverContainersByUUIDs(uuids []string) ([]discoveredContainer, error) {
 }
 
 func discoverByLabel(label string) ([]discoveredContainer, error) {
-	cmd := exec.Command("docker", "ps", "-a",
-		"--filter", "label="+label,
-		"--format", "{{.ID}}\t{{.Names}}\t{{.State}}")
-	out, err := cmd.CombinedOutput()
+	ctx := context.Background()
+	cli, err := getDockerClient()
 	if err != nil {
-		return nil, fmt.Errorf("docker ps: %s: %w", strings.TrimSpace(string(out)), err)
+		return nil, fmt.Errorf("docker client: %w", err)
 	}
 
-	output := strings.TrimSpace(string(out))
-	if output == "" {
-		return nil, nil
+	filters := make(mobyclient.Filters)
+	filters = filters.Add("label", label)
+
+	result, err := cli.ContainerList(ctx, mobyclient.ContainerListOptions{
+		All:     true,
+		Filters: filters,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("docker ps: %w", err)
 	}
 
 	var containers []discoveredContainer
-	for _, line := range strings.Split(output, "\n") {
-		parts := strings.SplitN(line, "\t", 3)
-		if len(parts) != 3 {
-			continue
+	for _, c := range result.Items {
+		name := ""
+		if len(c.Names) > 0 {
+			// Docker prefixes names with "/", strip it
+			name = strings.TrimPrefix(c.Names[0], "/")
 		}
 		containers = append(containers, discoveredContainer{
-			ID:      parts[0],
-			Name:    parts[1],
-			Running: parts[2] == "running",
+			ID:      c.ID,
+			Name:    name,
+			Running: c.State == apicontainer.StateRunning,
 		})
 	}
 	return containers, nil
@@ -835,15 +978,24 @@ func discoverByLabel(label string) ([]discoveredContainer, error) {
 
 // cleanStaleContainer force-removes a container by name (best-effort).
 func cleanStaleContainer(name string) error {
-	cmd := exec.Command("docker", "rm", "-f", name)
-	out, err := cmd.CombinedOutput()
+	ctx := context.Background()
+	cli, err := getDockerClient()
 	if err != nil {
-		return fmt.Errorf("docker rm -f %s: %s: %w", name, strings.TrimSpace(string(out)), err)
+		return fmt.Errorf("docker client: %w", err)
+	}
+
+	_, err = cli.ContainerRemove(ctx, name, mobyclient.ContainerRemoveOptions{
+		Force: true,
+	})
+	if err != nil {
+		return fmt.Errorf("docker rm -f %s: %w", name, err)
 	}
 	return nil
 }
 
-// dockerExec runs a command inside a Docker container (for attach).
+// dockerExec runs a command inside a Docker container (for interactive attach).
+// This uses exec.Command directly because interactive TTY sessions require
+// direct stdin/stdout/stderr passthrough that the SDK does not easily support.
 func dockerExec(containerID string) *exec.Cmd {
 	return exec.Command("docker", "exec", "-it", containerID, "/bin/bash")
 }

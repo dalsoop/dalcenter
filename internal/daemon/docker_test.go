@@ -229,8 +229,11 @@ func TestAppendCredentialMounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	var warnings []string
-	args := appendCredentialMounts(nil, home, []string{"claude", "codex"}, &warnings)
-	joined := strings.Join(args, " ")
+	mounts := appendCredentialMounts(nil, home, []string{"claude", "codex"}, &warnings)
+	var joined string
+	for _, m := range mounts {
+		joined += m.Source + " " + m.Target + " "
+	}
 	if !strings.Contains(joined, ".claude/.credentials.json") {
 		t.Fatalf("expected claude credential mount, got %q", joined)
 	}

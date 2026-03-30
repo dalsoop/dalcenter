@@ -25,11 +25,8 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | g
     apt-get update -qq && apt-get install -y -qq gh && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p .claude/skills .claude/hooks /etc/dal
-
-# Auto-approve all tools for autonomous dal operation
-COPY settings.json .claude/settings.json
-COPY settings.json /etc/dal/settings.json.default
+# dalcli and settings.json are injected at wake time
+RUN mkdir -p .claude/skills .claude/hooks
 
 # Git credential helper
 RUN git config --global credential.helper '!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f'
