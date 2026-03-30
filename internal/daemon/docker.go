@@ -171,9 +171,17 @@ func appendCredentialMounts(args []string, hostHome string, players []string, wa
 	return args
 }
 
+// bridgeURLForContainer rewrites localhost URLs to host.docker.internal
+// so containers can reach the host's matterbridge.
+func bridgeURLForContainer(bridgeURL string) string {
+	bridgeURL = strings.Replace(bridgeURL, "localhost", dockerHostAlias, 1)
+	bridgeURL = strings.Replace(bridgeURL, "127.0.0.1", dockerHostAlias, 1)
+	return bridgeURL
+}
+
 // dockerRun creates and starts a Docker container for a dal.
 // It returns the container ID, any credential warnings, and an error.
-func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *localdal.DalProfile) (string, []string, error) {
+func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr, bridgeURL string, dal *localdal.DalProfile) (string, []string, error) {
 	var warnings []string
 	containerName := dalContainerName(instanceName, dal.UUID)
 	tag := "latest"
@@ -214,7 +222,7 @@ func dockerRun(localdalRoot, serviceRepo, instanceName, daemonAddr string, dal *
 	}
 	args = append(args,
 		"-e", fmt.Sprintf("DALCENTER_URL=http://%s%s", dockerHostAlias, daemonAddr),
-		"-e", fmt.Sprintf("DALCENTER_BRIDGE_URL=%s", os.Getenv("DALCENTER_BRIDGE_URL")),
+		"-e", fmt.Sprintf("DALCENTER_BRIDGE_URL=%s", bridgeURLForContainer(bridgeURL)),
 		// VeilKey — pass through if available
 		"-e", fmt.Sprintf("VEILKEY_LOCALVAULT_URL=%s", os.Getenv("VEILKEY_LOCALVAULT_URL")),
 		// Mount dal directory (read-only)

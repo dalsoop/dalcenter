@@ -363,7 +363,7 @@ func (d *Daemon) handleWake(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[daemon] clean stale container %s: %v (continuing)", targetContainerName, err)
 	}
 
-	containerID, warnings, err := dockerRun(d.localdalRoot, d.serviceRepo, instanceName, d.addr, dal)
+	containerID, warnings, err := dockerRun(d.localdalRoot, d.serviceRepo, instanceName, d.addr, d.bridgeURL, dal)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("wake failed: %v", err), 500)
 		return
@@ -586,7 +586,7 @@ func (d *Daemon) runSync() (synced, restarted []string) {
 				log.Printf("[daemon] sync restart stop %s: %v", name, err)
 				continue
 			}
-			newID, _, err := dockerRun(d.localdalRoot, d.serviceRepo, name, d.addr, dal)
+			newID, _, err := dockerRun(d.localdalRoot, d.serviceRepo, name, d.addr, d.bridgeURL, dal)
 			if err != nil {
 				log.Printf("[daemon] sync restart run %s: %v", name, err)
 				d.mu.Lock()
