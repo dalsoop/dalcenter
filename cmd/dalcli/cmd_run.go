@@ -873,10 +873,11 @@ func isOnlyArtifacts(porcelainOutput string) bool {
 }
 
 // autoGitWorkflow checks for file changes and creates a branch + commit + PR.
+// Two paths: (A) Claude already committed → push + PR, (B) uncommitted changes → stash + branch + commit + push + PR.
 // Gate 1: .dal/ only → skip
 // Gate 2: artifacts only → skip
-// Gate 3: no real code files (*.go, *.rs, *.md in .dal/) → skip
-// Gate 4: PR 생성 전 diff 재확인 — 빈 PR 방지
+// Gate 3: no real code files (*.go, *.rs, *.py, *.ts, *.js, *.cue, docs/) → skip
+// Gate 4: staged 파일 확인 — 빈 커밋 방지
 func autoGitWorkflow(dalName string) string {
 	run := func(args ...string) (string, error) {
 		cmd := exec.Command(args[0], args[1:]...)
@@ -885,19 +886,29 @@ func autoGitWorkflow(dalName string) string {
 		return strings.TrimSpace(string(out)), err
 	}
 
-	// 먼저 main으로 복귀 (이전 실행에서 다른 브랜치에 남아있을 수 있음)
-	run("git", "checkout", "main")
+	// Fetch latest main for accurate comparison
+	run("git", "fetch", "origin", "main")
 
-	// Check changes
-	statusCmd := exec.Command("git", "status", "--porcelain")
-	statusCmd.Dir = "/workspace"
-	statusOut, err := statusCmd.Output()
-	if err != nil || len(strings.TrimSpace(string(statusOut))) == 0 {
+	// 1. Check uncommitted changes BEFORE any checkout (checkout can lose changes)
+	statusOut, _ := run("git", "status", "--porcelain")
+	changes := strings.TrimSpace(statusOut)
+
+	// 2. Check if Claude already committed (git log origin/main..HEAD)
+	newCommits, _ := run("git", "log", "--oneline", "origin/main..HEAD")
+	hasNewCommits := len(strings.TrimSpace(newCommits)) > 0
+
+	if len(changes) == 0 && !hasNewCommits {
+		log.Printf("[git] no uncommitted changes and no new commits — skip")
 		return ""
 	}
 
-	changes := strings.TrimSpace(string(statusOut))
-	log.Printf("[git] changes detected:\n%s", changes)
+	// Path A: Claude already committed (no uncommitted changes, but new commits exist)
+	if len(changes) == 0 && hasNewCommits {
+		return autoGitWorkflowCommitted(dalName, run, newCommits)
+	}
+
+	// Path B: Uncommitted changes exist — apply gate checks then commit
+	log.Printf("[git] uncommitted changes detected:\n%s", changes)
 
 	// Gate 1: .dal/ only
 	if isDalOnlyChanges(changes) {
@@ -921,7 +932,6 @@ func autoGitWorkflow(dalName string) string {
 		if len(file) > 3 {
 			file = file[3:]
 		}
-		// 코드 파일: .go, .rs, .py, .ts, .js, .cue 또는 docs/
 		if strings.HasSuffix(file, ".go") || strings.HasSuffix(file, ".rs") ||
 			strings.HasSuffix(file, ".py") || strings.HasSuffix(file, ".ts") ||
 			strings.HasSuffix(file, ".js") || strings.HasSuffix(file, ".cue") ||
@@ -932,24 +942,98 @@ func autoGitWorkflow(dalName string) string {
 	}
 	if !hasCodeChange {
 		log.Printf("[git] gate3: no code files changed — skip")
-		// 부산물 정리 (git checkout으로 되돌리기)
 		run("git", "checkout", "--", ".")
 		return ""
 	}
 
-	// Create branch
+	// Stash uncommitted changes, create branch from main, then pop
+	if _, err := run("git", "stash", "--include-untracked"); err != nil {
+		log.Printf("[git] stash failed: %v — trying direct branch", err)
+		// Fallback: create branch from current HEAD without stash
+		return autoGitWorkflowDirect(dalName, run, changes)
+	}
+
+	run("git", "checkout", "main")
+
+	branch := fmt.Sprintf("dal/%s/%d", dalName, time.Now().Unix())
+	if _, err := run("git", "checkout", "-b", branch); err != nil {
+		run("git", "stash", "pop")
+		return fmt.Sprintf("⚠️ 브랜치 생성 실패: %v", err)
+	}
+
+	if _, err := run("git", "stash", "pop"); err != nil {
+		log.Printf("[git] stash pop conflict — trying merge strategy")
+		// stash pop 충돌 시 stash drop하고 직접 stage
+		run("git", "checkout", "stash@{0}", "--", ".")
+		run("git", "stash", "drop")
+	}
+
+	return autoGitWorkflowStageAndPush(dalName, run, branch)
+}
+
+// autoGitWorkflowCommitted handles the case where Claude already committed changes.
+func autoGitWorkflowCommitted(dalName string, run func(...string) (string, error), newCommits string) string {
+	currentBranch, _ := run("git", "rev-parse", "--abbrev-ref", "HEAD")
+	log.Printf("[git] Claude committed on branch %s:\n%s", currentBranch, newCommits)
+
+	var branch string
+	if currentBranch == "main" || currentBranch == "HEAD" {
+		// Claude committed on main — move commits to a new branch
+		branch = fmt.Sprintf("dal/%s/%d", dalName, time.Now().Unix())
+		if _, err := run("git", "branch", branch); err != nil {
+			return fmt.Sprintf("⚠️ 브랜치 생성 실패: %v", err)
+		}
+		// Reset main back to origin/main (commits are safe on new branch)
+		run("git", "reset", "--hard", "origin/main")
+		run("git", "checkout", branch)
+	} else {
+		branch = currentBranch
+	}
+
+	diffOut, _ := run("git", "diff", "--stat", "origin/main..HEAD")
+
+	// Push
+	if _, err := run("git", "push", "-u", "origin", branch); err != nil {
+		run("git", "checkout", "main")
+		return fmt.Sprintf("⚠️ 푸시 실패: %v", err)
+	}
+
+	// Check existing PR for this branch
+	existingPR, _ := run("gh", "pr", "view", branch, "--json", "url", "--jq", ".url")
+	if existingPR != "" {
+		run("git", "checkout", "main")
+		return fmt.Sprintf("🔀 기존 PR에 푸시 완료\n브랜치: `%s`\n%s", branch, existingPR)
+	}
+
+	// Create PR
+	prTitle := fmt.Sprintf("feat(%s): %s", dalName, branch)
+	prBody := fmt.Sprintf("dal-%s 작업 결과.\n\n```\n%s\n```", dalName, diffOut)
+	prOut, err := run("gh", "pr", "create", "--base", "main", "--title", prTitle, "--body", prBody)
+	if err != nil {
+		run("git", "checkout", "main")
+		return fmt.Sprintf("✅ 커밋+푸시 완료 (`%s`)\n⚠️ PR 생성 실패: %v", branch, err)
+	}
+
+	run("git", "checkout", "main")
+	return fmt.Sprintf("🔀 PR 생성 완료\n브랜치: `%s`\n%s", branch, prOut)
+}
+
+// autoGitWorkflowDirect creates a branch from current HEAD (fallback when stash fails).
+func autoGitWorkflowDirect(dalName string, run func(...string) (string, error), changes string) string {
 	branch := fmt.Sprintf("dal/%s/%d", dalName, time.Now().Unix())
 	if _, err := run("git", "checkout", "-b", branch); err != nil {
 		return fmt.Sprintf("⚠️ 브랜치 생성 실패: %v", err)
 	}
+	return autoGitWorkflowStageAndPush(dalName, run, branch)
+}
 
-	// Stage only code files (not artifacts)
-	// git add specific patterns instead of -A
-	codePatterns := []string{"*.go", "*.rs", "*.py", "*.ts", "*.js", "*.cue", "docs/"}
+// autoGitWorkflowStageAndPush stages code files, commits, pushes, and creates a PR.
+func autoGitWorkflowStageAndPush(dalName string, run func(...string) (string, error), branch string) string {
+	// Stage code files + dependency files
+	codePatterns := []string{"*.go", "*.rs", "*.py", "*.ts", "*.js", "*.cue", "docs/", "go.mod", "go.sum"}
 	for _, pattern := range codePatterns {
 		run("git", "add", pattern)
 	}
-	// .dal/ charter/skill 변경도 포함 (코드 변경과 함께인 경우)
 	run("git", "add", ".dal/")
 
 	// Gate 4: staged 파일 확인 — 빈 커밋 방지
@@ -980,7 +1064,7 @@ func autoGitWorkflow(dalName string) string {
 	// Create PR
 	prTitle := fmt.Sprintf("feat(%s): %s", dalName, branch)
 	prBody := fmt.Sprintf("dal-%s 작업 결과.\n\n```\n%s\n```", dalName, diffOut)
-	prOut, err := run("gh", "pr", "create", "--title", prTitle, "--body", prBody)
+	prOut, err := run("gh", "pr", "create", "--base", "main", "--title", prTitle, "--body", prBody)
 	if err != nil {
 		run("git", "checkout", "main")
 		return fmt.Sprintf("✅ 커밋+푸시 완료 (`%s`)\n⚠️ PR 생성 실패: %v", branch, err)
