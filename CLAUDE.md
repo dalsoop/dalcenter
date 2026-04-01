@@ -66,10 +66,13 @@ systemctl restart 'dalcenter@*'
 | doctor | 헬스체크 — 팀/dal 상태 모니터링 |
 | custodian | 자동 커밋 — 정기 정리 작업 |
 | scribe | 메모리 품질 — CLAUDE.md + memory 파일 감사 |
+| scheduled dalroot | 이슈 감시 + 리마인드 — dal-control 채널에 보고 |
 
 ---
 
 ## dal 작업 흐름
+
+### 수동 흐름 (기존)
 
 ```
 이슈 생성 (GitHub)
@@ -78,6 +81,19 @@ systemctl restart 'dalcenter@*'
   → dal이 브랜치 + PR 생성
   → dalroot가 리뷰 후 머지
 ```
+
+### 자동화 파이프라인
+
+```
+사람 (이슈 생성)
+  → scheduled dalroot (감시 + 리마인드)
+  → dal 팀 (구현)
+  → dal-control 채널 (보고)
+  → 사람 (이모지/코멘트로 승인·방향 제시)
+```
+
+scheduled dalroot가 GitHub 이슈를 감시하고, 적절한 dal 팀에 작업을 전달한다.
+결과는 dal-control 채널에 보고되며, 사람이 비동기로 승인/방향을 결정한다.
 
 ---
 
