@@ -221,6 +221,14 @@ func (d *Daemon) handleTaskStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "dal and task are required", http.StatusBadRequest)
 		return
 	}
+
+	// Enforce per-dal concurrency limit
+	if !d.canAcceptTask(req.Dal) {
+		max := d.maxRunningForDal(req.Dal)
+		http.Error(w, fmt.Sprintf("dal %q has reached max concurrent tasks (%d)", req.Dal, max), http.StatusTooManyRequests)
+		return
+	}
+
 	tr := d.tasks.New(req.Dal, req.Task)
 	respondJSON(w, http.StatusAccepted, map[string]string{
 		"task_id": tr.ID,
@@ -334,6 +342,13 @@ func (d *Daemon) handleTask(w http.ResponseWriter, r *http.Request) {
 	// Role-aware warning: member dals should receive tasks via leader routing
 	if c.Role == "member" {
 		log.Printf("[scope] ⚠️ direct task to member %q — prefer leader routing via dalcli-leader assign", req.Dal)
+	}
+
+	// Enforce per-dal concurrency limit
+	if !d.canAcceptTask(req.Dal) {
+		max := d.maxRunningForDal(req.Dal)
+		http.Error(w, fmt.Sprintf("dal %q has reached max concurrent tasks (%d)", req.Dal, max), http.StatusTooManyRequests)
+		return
 	}
 
 	tr := d.tasks.New(req.Dal, req.Task)
