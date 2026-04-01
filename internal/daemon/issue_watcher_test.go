@@ -74,3 +74,145 @@ func TestIsPullRequest(t *testing.T) {
 		}
 	}
 }
+
+func TestReminderBackoff(t *testing.T) {
+	tests := []struct {
+		count int
+		want  time.Duration
+	}{
+		{0, 5 * time.Minute},
+		{1, 15 * time.Minute},
+		{2, 30 * time.Minute},
+		{3, 30 * time.Minute},
+		{10, 30 * time.Minute},
+	}
+	for _, tt := range tests {
+		got := reminderBackoff(tt.count)
+		if got != tt.want {
+			t.Errorf("reminderBackoff(%d) = %v, want %v", tt.count, got, tt.want)
+		}
+	}
+}
+
+func TestExtractIssueFromBranch(t *testing.T) {
+	tests := []struct {
+		branch string
+		want   string
+	}{
+		{"issue-123-fix-bug", "123"},
+		{"fix-456-typo", "456"},
+		{"feat-789-new-feature", "789"},
+		{"main", ""},
+		{"issue-abc-something", ""},
+		{"random-branch", ""},
+		{"issue-42", "42"},
+	}
+	for _, tt := range tests {
+		got := extractIssueFromBranch(tt.branch)
+		if got != tt.want {
+			t.Errorf("extractIssueFromBranch(%q) = %q, want %q", tt.branch, got, tt.want)
+		}
+	}
+}
+
+func TestHasDalrootDelegation(t *testing.T) {
+	tests := []struct {
+		name     string
+		comments []ghComment
+		want     bool
+	}{
+		{
+			name:     "no comments",
+			comments: nil,
+			want:     false,
+		},
+		{
+			name: "comment with @dalroot mention",
+			comments: []ghComment{
+				{Body: "이 작업은 @dalroot에게 위임합니다"},
+			},
+			want: true,
+		},
+		{
+			name: "comment with dalroot reference",
+			comments: []ghComment{
+				{Body: "dalroot가 처리해야 할 호스트 작업입니다"},
+			},
+			want: true,
+		},
+		{
+			name: "unrelated comments",
+			comments: []ghComment{
+				{Body: "LGTM"},
+				{Body: "좋은 수정입니다"},
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := hasDalrootDelegation(tt.comments)
+			if got != tt.want {
+				t.Errorf("hasDalrootDelegation() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIssueStoreGet(t *testing.T) {
+	s := &issueStore{issues: make(map[int]*trackedIssue)}
+
+	if got := s.Get(1); got != nil {
+		t.Error("expected nil for unknown issue")
+	}
+
+	tracked := &trackedIssue{Number: 1, Title: "test", Status: "dispatched", DetectedAt: time.Now()}
+	s.Track(tracked)
+
+	got := s.Get(1)
+	if got == nil {
+		t.Fatal("expected non-nil for tracked issue")
+	}
+	if got.Title != "test" {
+		t.Errorf("expected title 'test', got %q", got.Title)
+	}
+}
+
+func TestIssueStoreDelegated(t *testing.T) {
+	s := &issueStore{issues: make(map[int]*trackedIssue)}
+
+	now := time.Now().UTC()
+	s.Track(&trackedIssue{Number: 1, Title: "delegated", Status: "dispatched", DelegatedAt: &now, DetectedAt: now})
+	s.Track(&trackedIssue{Number: 2, Title: "not delegated", Status: "dispatched", DetectedAt: now})
+	s.Track(&trackedIssue{Number: 3, Title: "closed delegated", Status: "closed", DelegatedAt: &now, DetectedAt: now})
+
+	delegated := s.Delegated()
+	if len(delegated) != 1 {
+		t.Fatalf("expected 1 delegated issue, got %d", len(delegated))
+	}
+	if delegated[0].Number != 1 {
+		t.Errorf("expected issue #1, got #%d", delegated[0].Number)
+	}
+}
+
+func TestTrackedIssueDelegationFields(t *testing.T) {
+	now := time.Now().UTC()
+	tracked := &trackedIssue{
+		Number:        42,
+		Title:         "host config",
+		Status:        "dispatched",
+		DelegatedAt:   &now,
+		DelegatedTo:   "dalroot",
+		ReminderCount: 2,
+	}
+
+	if tracked.DelegatedTo != "dalroot" {
+		t.Errorf("expected DelegatedTo=dalroot, got %q", tracked.DelegatedTo)
+	}
+	if tracked.ReminderCount != 2 {
+		t.Errorf("expected ReminderCount=2, got %d", tracked.ReminderCount)
+	}
+	if tracked.DelegatedAt == nil || tracked.DelegatedAt.IsZero() {
+		t.Error("expected DelegatedAt to be set")
+	}
+}

@@ -46,8 +46,45 @@ type trackedIssue struct {
 	Labels     []string  `json:"labels,omitempty"`
 	DetectedAt time.Time `json:"detected_at"`
 	TaskID     string    `json:"task_id,omitempty"` // task ID dispatched to leader
-	Status     string    `json:"status"`            // "dispatched", "skipped", "error"
+	Status     string    `json:"status"`            // "dispatched", "skipped", "error", "closed"
 	Error      string    `json:"error,omitempty"`
+
+	// Delegation tracking for dalroot reminders
+	DelegatedAt    *time.Time `json:"delegated_at,omitempty"`
+	DelegatedTo    string     `json:"delegated_to,omitempty"`
+	ReminderCount  int        `json:"reminder_count,omitempty"`
+	LastRemindedAt *time.Time `json:"last_reminded_at,omitempty"`
+}
+
+// ghPR represents a GitHub pull request from `gh pr list --json`.
+type ghPR struct {
+	Number    int       `json:"number"`
+	Title     string    `json:"title"`
+	State     string    `json:"state"`
+	MergedAt  time.Time `json:"mergedAt"`
+	URL       string    `json:"url"`
+	Author    ghAuthor  `json:"author"`
+	HeadRef   string    `json:"headRefName"`
+}
+
+// ghComment represents a GitHub issue comment.
+type ghComment struct {
+	Body      string   `json:"body"`
+	Author    ghAuthor `json:"author"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// reminderBackoff returns the next reminder interval based on reminder count.
+// Schedule: 5m → 15m → 30m (capped).
+func reminderBackoff(count int) time.Duration {
+	switch {
+	case count <= 0:
+		return 5 * time.Minute
+	case count == 1:
+		return 15 * time.Minute
+	default:
+		return 30 * time.Minute
+	}
 }
 
 // issueStore tracks which issues have been seen and dispatched.
@@ -145,6 +182,10 @@ func (d *Daemon) startIssueWatcher(ctx context.Context, repo string, interval ti
 	}
 
 	d.pollGitHubIssues(repo)
+	d.pollIssueCloses(repo)
+	d.pollMergedPRs(repo)
+	d.pollDalrootDelegations(repo)
+	d.pollDalrootReminders()
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -156,6 +197,10 @@ func (d *Daemon) startIssueWatcher(ctx context.Context, repo string, interval ti
 			return
 		case <-ticker.C:
 			d.pollGitHubIssues(repo)
+			d.pollIssueCloses(repo)
+			d.pollMergedPRs(repo)
+			d.pollDalrootDelegations(repo)
+			d.pollDalrootReminders()
 		}
 	}
 }
@@ -305,6 +350,26 @@ func (d *Daemon) dispatchIssueToLeader(issue ghIssue) (string, error) {
 	return tr.ID, nil
 }
 
+// Get returns a tracked issue by number, or nil if not found.
+func (s *issueStore) Get(number int) *trackedIssue {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.issues[number]
+}
+
+// Delegated returns all tracked issues that have been delegated but not yet resolved.
+func (s *issueStore) Delegated() []*trackedIssue {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var result []*trackedIssue
+	for _, issue := range s.issues {
+		if issue.DelegatedAt != nil && issue.Status == "dispatched" {
+			result = append(result, issue)
+		}
+	}
+	return result
+}
+
 // handleIssues returns tracked GitHub issues.
 // GET /api/issues
 func (d *Daemon) handleIssues(w http.ResponseWriter, r *http.Request) {
@@ -313,4 +378,244 @@ func (d *Daemon) handleIssues(w http.ResponseWriter, r *http.Request) {
 		"issues": issues,
 		"total":  len(issues),
 	})
+}
+
+// fetchClosedGitHubIssues calls `gh issue list --state closed` to get recently closed issues.
+func fetchClosedGitHubIssues(repo string, limit int) ([]ghIssue, error) {
+	if limit <= 0 {
+		limit = 30
+	}
+	cmd := exec.Command("gh", "issue", "list",
+		"--repo", repo,
+		"--state", "closed",
+		"--limit", fmt.Sprintf("%d", limit),
+		"--json", "number,title,body,state,labels,createdAt,author,url",
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("gh issue list --state closed: %s", strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		return nil, fmt.Errorf("gh issue list --state closed: %w", err)
+	}
+	var issues []ghIssue
+	if err := json.Unmarshal(out, &issues); err != nil {
+		return nil, fmt.Errorf("parse closed issues: %w", err)
+	}
+	return issues, nil
+}
+
+// fetchMergedPRs calls `gh pr list --state merged` to get recently merged PRs.
+func fetchMergedPRs(repo string, limit int) ([]ghPR, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	cmd := exec.Command("gh", "pr", "list",
+		"--repo", repo,
+		"--state", "merged",
+		"--limit", fmt.Sprintf("%d", limit),
+		"--json", "number,title,state,mergedAt,url,author,headRefName",
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("gh pr list --state merged: %s", strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		return nil, fmt.Errorf("gh pr list --state merged: %w", err)
+	}
+	var prs []ghPR
+	if err := json.Unmarshal(out, &prs); err != nil {
+		return nil, fmt.Errorf("parse merged PRs: %w", err)
+	}
+	return prs, nil
+}
+
+// fetchIssueComments calls `gh issue view` to get comments on an issue.
+func fetchIssueComments(repo string, issueNumber int) ([]ghComment, error) {
+	cmd := exec.Command("gh", "issue", "view",
+		fmt.Sprintf("%d", issueNumber),
+		"--repo", repo,
+		"--json", "comments",
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("gh issue view #%d comments: %s", issueNumber, strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		return nil, fmt.Errorf("gh issue view #%d comments: %w", issueNumber, err)
+	}
+	var result struct {
+		Comments []ghComment `json:"comments"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return nil, fmt.Errorf("parse issue #%d comments: %w", issueNumber, err)
+	}
+	return result.Comments, nil
+}
+
+// hasDalrootDelegation checks if any comment delegates to dalroot.
+func hasDalrootDelegation(comments []ghComment) bool {
+	for _, c := range comments {
+		lower := strings.ToLower(c.Body)
+		if strings.Contains(lower, "@dalroot") || strings.Contains(lower, "dalroot") {
+			return true
+		}
+	}
+	return false
+}
+
+// notifyDalroot sends a notification to dalroot via bridge with @dalroot mention.
+func (d *Daemon) notifyDalroot(msg string) {
+	fullMsg := "@dalroot " + msg
+	if d.bridgeURL != "" {
+		if err := d.bridgePost(fullMsg, "dalcenter"); err != nil {
+			log.Printf("[issue-watcher] dalroot bridge notify failed: %v", err)
+		}
+	}
+
+	dispatchWebhook(WebhookEvent{
+		Event:     "dalroot_notify",
+		Dal:       "dalcenter",
+		Task:      msg,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+// pollIssueCloses detects issues that were open but are now closed.
+func (d *Daemon) pollIssueCloses(repo string) {
+	closed, err := fetchClosedGitHubIssues(repo, 30)
+	if err != nil {
+		log.Printf("[issue-watcher] fetch closed issues failed: %v", err)
+		return
+	}
+
+	for _, issue := range closed {
+		tracked := d.issues.Get(issue.Number)
+		if tracked == nil || tracked.Status == "closed" {
+			continue
+		}
+		// Issue was tracked and is now closed
+		tracked.Status = "closed"
+		d.issues.Track(tracked)
+
+		msg := fmt.Sprintf("[@dalroot] #%d close: %s (by %s)", issue.Number, issue.Title, issue.Author.Login)
+		d.notifyDalroot(msg)
+		log.Printf("[issue-watcher] issue #%d closed, notified dalroot", issue.Number)
+	}
+}
+
+// pollMergedPRs detects recently merged PRs and notifies dalroot.
+func (d *Daemon) pollMergedPRs(repo string) {
+	prs, err := fetchMergedPRs(repo, 10)
+	if err != nil {
+		log.Printf("[issue-watcher] fetch merged PRs failed: %v", err)
+		return
+	}
+
+	for _, pr := range prs {
+		// Use negative numbers for PR tracking to avoid collision with issue numbers
+		trackKey := -pr.Number
+		if d.issues.Seen(trackKey) {
+			continue
+		}
+
+		// Only notify for PRs merged within the last poll interval (+ buffer)
+		if time.Since(pr.MergedAt) > 2*defaultIssuePollInterval {
+			continue
+		}
+
+		// Track this PR so we don't notify again
+		d.issues.Track(&trackedIssue{
+			Number:     trackKey,
+			Title:      pr.Title,
+			URL:        pr.URL,
+			Author:     pr.Author.Login,
+			DetectedAt: time.Now().UTC(),
+			Status:     "closed",
+		})
+
+		// Extract issue number from branch name (e.g., "issue-123-xxx")
+		issueRef := extractIssueFromBranch(pr.HeadRef)
+
+		var msg string
+		if issueRef != "" {
+			msg = fmt.Sprintf("[@dalroot] #%s close: %s (PR #%d merged)", issueRef, pr.Title, pr.Number)
+		} else {
+			msg = fmt.Sprintf("[@dalroot] PR #%d merged: %s (by %s)", pr.Number, pr.Title, pr.Author.Login)
+		}
+		d.notifyDalroot(msg)
+		log.Printf("[issue-watcher] PR #%d merged, notified dalroot", pr.Number)
+	}
+}
+
+// extractIssueFromBranch extracts an issue number from a branch name like "issue-123-description".
+func extractIssueFromBranch(branch string) string {
+	parts := strings.Split(branch, "-")
+	if len(parts) >= 2 && (parts[0] == "issue" || parts[0] == "fix" || parts[0] == "feat") {
+		// Check if second part is a number
+		for _, c := range parts[1] {
+			if c < '0' || c > '9' {
+				return ""
+			}
+		}
+		return parts[1]
+	}
+	return ""
+}
+
+// pollDalrootDelegations checks tracked open issues for comments delegating to dalroot.
+func (d *Daemon) pollDalrootDelegations(repo string) {
+	for _, tracked := range d.issues.List() {
+		if tracked.Status != "dispatched" || tracked.DelegatedAt != nil {
+			continue
+		}
+
+		comments, err := fetchIssueComments(repo, tracked.Number)
+		if err != nil {
+			log.Printf("[issue-watcher] fetch comments for #%d failed: %v", tracked.Number, err)
+			continue
+		}
+
+		if hasDalrootDelegation(comments) {
+			now := time.Now().UTC()
+			tracked.DelegatedAt = &now
+			tracked.DelegatedTo = "dalroot"
+			d.issues.Track(tracked)
+
+			msg := fmt.Sprintf("[@dalroot] #%d 완료: %s (by %s)", tracked.Number, tracked.Title, tracked.Author)
+			d.notifyDalroot(msg)
+			log.Printf("[issue-watcher] issue #%d delegated to dalroot, notified", tracked.Number)
+		}
+	}
+}
+
+// pollDalrootReminders checks delegated issues and sends backoff reminders.
+func (d *Daemon) pollDalrootReminders() {
+	now := time.Now().UTC()
+	for _, tracked := range d.issues.Delegated() {
+		if tracked.DelegatedAt == nil {
+			continue
+		}
+
+		interval := reminderBackoff(tracked.ReminderCount)
+		var lastNotify time.Time
+		if tracked.LastRemindedAt != nil {
+			lastNotify = *tracked.LastRemindedAt
+		} else {
+			lastNotify = *tracked.DelegatedAt
+		}
+
+		if now.Sub(lastNotify) < interval {
+			continue
+		}
+
+		elapsed := now.Sub(*tracked.DelegatedAt).Truncate(time.Minute)
+		msg := fmt.Sprintf("[@dalroot] 리마인드: #%d 호스트 작업 미처리 (%s 경과)", tracked.Number, elapsed)
+		d.notifyDalroot(msg)
+
+		tracked.ReminderCount++
+		tracked.LastRemindedAt = &now
+		d.issues.Track(tracked)
+		log.Printf("[issue-watcher] reminder #%d for issue #%d (%s elapsed)", tracked.ReminderCount, tracked.Number, elapsed)
+	}
 }
