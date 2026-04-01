@@ -541,3 +541,33 @@ func (c *Client) TaskList() ([]TaskResult, error) {
 	json.NewDecoder(resp.Body).Decode(&results)
 	return results, nil
 }
+
+// Workflows returns all tracked issue workflows.
+func (c *Client) Workflows() ([]*issueWorkflow, error) {
+	resp, err := c.http.Get(c.baseURL + "/api/workflows")
+	if err != nil {
+		return nil, fmt.Errorf("daemon unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Workflows []*issueWorkflow `json:"workflows"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+	return result.Workflows, nil
+}
+
+// Workflow returns a single issue workflow by issue number.
+func (c *Client) Workflow(issueNumber int) (*issueWorkflow, error) {
+	resp, err := c.http.Get(c.baseURL + fmt.Sprintf("/api/workflow/%d", issueNumber))
+	if err != nil {
+		return nil, fmt.Errorf("daemon unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("workflow not found: %s", strings.TrimSpace(string(b)))
+	}
+	var wf issueWorkflow
+	json.NewDecoder(resp.Body).Decode(&wf)
+	return &wf, nil
+}

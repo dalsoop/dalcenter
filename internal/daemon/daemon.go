@@ -46,6 +46,7 @@ type Daemon struct {
 	feedback     *feedbackStore
 	costs        *costStore
 	issues       *issueStore
+	workflows    *workflowStore
 	registry     *Registry
 	startTime    time.Time
 }
@@ -88,6 +89,7 @@ func New(addr, localdalRoot, serviceRepo, bridgeURL, bridgeConf, githubRepo stri
 		feedback:     newFeedbackStoreWithFile(filepath.Join(dataDir(serviceRepo), "feedback.json")),
 		costs:        newCostStoreWithFile(filepath.Join(dataDir(serviceRepo), "costs.json"), orchestrationLogDir(serviceRepo)),
 		issues:       newIssueStore(filepath.Join(dataDir(serviceRepo), "issues_seen.json")),
+		workflows:    newWorkflowStore(filepath.Join(dataDir(serviceRepo), "workflows.json")),
 		registry:     newRegistry(serviceRepo),
 		credSyncLast: newCredentialSyncMap(),
 		startTime:    time.Now(),
@@ -231,6 +233,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /api/escalations/{id}/resolve", d.requireAuth(d.handleResolveEscalation))
 	// GitHub issue tracking
 	mux.HandleFunc("GET /api/issues", d.handleIssues)
+	// Issue workflow lifecycle
+	mux.HandleFunc("GET /api/workflows", d.handleWorkflows)
+	mux.HandleFunc("GET /api/workflow/{issue}", d.handleWorkflow)
+	mux.HandleFunc("POST /api/workflow/{issue}/transition", d.requireAuth(d.handleWorkflowTransition))
 	// A2A protocol endpoints
 	mux.HandleFunc("GET /api/provider-status", d.handleProviderStatus)
 	mux.HandleFunc("POST /api/provider-trip", d.handleProviderTrip)
@@ -443,6 +449,11 @@ func (d *Daemon) handleWake(w http.ResponseWriter, r *http.Request) {
 	// Setup workspace: branch checkout + dependency install
 	if setupWarnings := setupWorkspace(containerID, dal, issueID); len(setupWarnings) > 0 {
 		warnings = append(warnings, setupWarnings...)
+	}
+
+	// Advance issue workflow when a member is woken for an issue
+	if issueID != "" {
+		d.advanceWorkflowOnWake(instanceName, issueID)
 	}
 
 	ws := dal.Workspace

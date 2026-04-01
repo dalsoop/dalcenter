@@ -191,15 +191,20 @@ func (d *Daemon) pollGitHubIssues(repo string) {
 			tracked.Labels = append(tracked.Labels, l.Name)
 		}
 
+		// Create workflow to track the full issue lifecycle
+		d.workflows.Create(issue)
+
 		// Dispatch to leader
 		taskID, err := d.dispatchIssueToLeader(issue)
 		if err != nil {
 			log.Printf("[issue-watcher] dispatch #%d failed: %v", issue.Number, err)
 			tracked.Status = "error"
 			tracked.Error = err.Error()
+			d.workflows.SetError(issue.Number, err.Error())
 		} else {
 			tracked.Status = "dispatched"
 			tracked.TaskID = taskID
+			d.workflows.SetLeaderTask(issue.Number, taskID)
 			log.Printf("[issue-watcher] dispatched #%d → leader (task=%s)", issue.Number, taskID)
 		}
 
@@ -289,6 +294,11 @@ func (d *Daemon) dispatchIssueToLeader(issue ghIssue) (string, error) {
 		body,
 		issue.Number, issue.Number,
 	)
+
+	// Post issue notification to project channel
+	issueNotice := fmt.Sprintf("📋 Issue #%d: %s (by %s)\n%s",
+		issue.Number, issue.Title, issue.Author.Login, issue.URL)
+	d.postWorkflowMessage(issueNotice)
 
 	// Dispatch as async task to leader
 	tr := d.tasks.New(leader.DalName, prompt)

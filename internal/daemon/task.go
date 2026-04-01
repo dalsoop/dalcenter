@@ -210,8 +210,9 @@ func taskStatusMessage(status, errMsg string) string {
 // POST /api/task/start
 func (d *Daemon) handleTaskStart(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Dal  string `json:"dal"`
-		Task string `json:"task"`
+		Dal   string `json:"dal"`
+		Task  string `json:"task"`
+		Issue int    `json:"issue,omitempty"` // optional issue number to link workflow
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
@@ -222,6 +223,12 @@ func (d *Daemon) handleTaskStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tr := d.tasks.New(req.Dal, req.Task)
+
+	// Link to issue workflow if specified
+	if req.Issue > 0 {
+		d.workflows.SetMemberTask(req.Issue, tr.ID)
+	}
+
 	respondJSON(w, http.StatusAccepted, map[string]string{
 		"task_id": tr.ID,
 		"status":  tr.Status,
@@ -253,6 +260,9 @@ func (d *Daemon) handleTaskFinish(w http.ResponseWriter, r *http.Request) {
 
 	// Notify dalroot on external task finish
 	notifyTaskComplete(tr.Dal, tr, d.serviceRepo)
+
+	// Advance issue workflow
+	d.advanceWorkflowOnTaskComplete(tr.Dal, tr)
 
 	respondJSON(w, http.StatusOK, tr)
 }
@@ -455,6 +465,9 @@ func (d *Daemon) execTaskInContainer(c *Container, tr *taskResult) {
 
 		// Notify dalroot on failure
 		notifyTaskComplete(c.DalName, tr, d.serviceRepo)
+
+		// Advance issue workflow on failure
+		d.advanceWorkflowOnTaskComplete(c.DalName, tr)
 	} else {
 		tr.Status = "done"
 		tr.Output = stdout.String()
@@ -488,6 +501,9 @@ func (d *Daemon) execTaskInContainer(c *Container, tr *taskResult) {
 
 		// Notify dalroot on completion
 		notifyTaskComplete(c.DalName, tr, d.serviceRepo)
+
+		// Advance issue workflow on completion
+		d.advanceWorkflowOnTaskComplete(c.DalName, tr)
 	}
 }
 
