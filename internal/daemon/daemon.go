@@ -196,6 +196,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 		go d.startOpsWatcher(ctx)
 	}
 
+	// Start config sync watcher (template change detection + tool audit)
+	if configSyncEnabled() {
+		go d.startConfigSyncWatcher(ctx)
+	}
+
 	if d.bridgeURL != "" {
 		log.Printf("[daemon] matterbridge URL: %s", d.bridgeURL)
 	}
@@ -222,6 +227,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /api/restart/{name}", d.requireAuth(d.handleRestart))
 	mux.HandleFunc("POST /api/replace/{name}", d.requireAuth(d.handleReplace))
 	mux.HandleFunc("POST /api/sync", d.requireAuth(d.handleSync))
+	mux.HandleFunc("POST /api/config-sync", d.requireAuth(d.handleConfigSync))
+	mux.HandleFunc("GET /api/config-sync", d.handleConfigSync)
 	mux.HandleFunc("POST /api/message", d.requireAuth(d.handleMessage))
 	mux.HandleFunc("POST /api/activity/{name}", d.requireAuth(d.handleActivity))
 	mux.HandleFunc("GET /api/agent-config/{name}", d.handleAgentConfig)
