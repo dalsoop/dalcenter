@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -178,29 +179,24 @@ func TestHandleMessageNoBridge(t *testing.T) {
 	}
 }
 
-func TestMultipleInstanceNaming(t *testing.T) {
+func TestDuplicateWakeReturnsConflict(t *testing.T) {
 	d, _ := setupTestDaemon(t)
 
-	// Simulate first instance
-	d.containers["dev"] = &Container{DalName: "dev", Status: "running"}
+	// Simulate first instance already running
+	d.containers["dev"] = &Container{DalName: "dev", ContainerID: "abc123", Status: "running"}
 
-	// Second wake should get dev-2
+	// Second wake should be rejected with 409
 	req := httptest.NewRequest("POST", "/api/wake/dev", nil)
 	req.SetPathValue("name", "dev")
 	w := httptest.NewRecorder()
 	d.handleWake(w, req)
 
-	// Will fail on docker run (no docker), but we can check the naming logic
-	// by checking if dev-2 would have been used
-	d.mu.RLock()
-	_, hasDevTwo := d.containers["dev-2"]
-	d.mu.RUnlock()
-
-	// docker run failed so dev-2 won't be in containers, but the original dev should still be there
-	if _, ok := d.containers["dev"]; !ok {
-		t.Fatal("original dev should still exist")
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict, got %d", w.Code)
 	}
-	_ = hasDevTwo // naming logic is tested by the code path
+	if !strings.Contains(w.Body.String(), "already running") {
+		t.Fatalf("expected 'already running' in body, got %q", w.Body.String())
+	}
 }
 
 func TestRunServer(t *testing.T) {
