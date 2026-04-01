@@ -533,6 +533,11 @@ func ReadDalCue(path, folderName string) (*DalProfile, error) {
 	return p, nil
 }
 
+// GenerateUUID returns a new random UUID v4 string.
+func GenerateUUID() string {
+	return generateUUID()
+}
+
 func generateUUID() string {
 	b := make([]byte, 16)
 	rand.Read(b)

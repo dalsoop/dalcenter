@@ -29,6 +29,7 @@ func main() {
 		newTaskListCmd(),
 		newClaimsCmd(),
 		newImageCmd(),
+		newRepoCreateCmd(),
 		newRegisterCmd(),
 		newUnregisterCmd(),
 		newTellCmd(),
