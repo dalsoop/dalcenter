@@ -9,6 +9,7 @@
 | PR 생성/머지 | leader | Direct |
 | 아키텍처 결정 | leader | Direct |
 | 구현+테스트 동시 | dev + tester | Multi |
+| 팀 상태 모니터링/복구 | ops | Auto |
 | 스킬 갭 | → 에스컬레이션 | — |
 
 ## Multi 모드 downstream

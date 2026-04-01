@@ -184,6 +184,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// Start leader health watcher (auto-recovery)
 	go d.startLeaderWatcher(ctx)
 
+	// Start ops watcher (cross-team monitoring, #599 + #583)
+	go d.startOpsWatcher(ctx)
+
 	if d.bridgeURL != "" {
 		log.Printf("[daemon] matterbridge URL: %s", d.bridgeURL)
 	}

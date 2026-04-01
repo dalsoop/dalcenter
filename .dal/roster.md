@@ -9,3 +9,4 @@
 | verifier | claude | member | sonnet | Verifier |
 | scribe | claude | member | haiku | 문서 관리자 |
 | codex-dev | codex | member | — | Codex developer |
+| ops | claude | member | haiku | Cross-team health monitor |
