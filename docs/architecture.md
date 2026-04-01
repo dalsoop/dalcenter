@@ -112,6 +112,7 @@ dalcenter sync   # repo-watcher 기다리지 않고 즉시 sync
 ## Mattermost 통신
 
 - 프로젝트당 채널 1개 (serve 시 자동 생성)
+- **dal-control** — 인프라 관제 대시보드 채널. scheduled dalroot가 보고, 사람이 이모지/코멘트로 승인·방향 제시
 - dal별 봇 계정 (wake 시 자동 생성)
 - assign → @mention으로 작업 지시
 - report → [dal-name] 보고
