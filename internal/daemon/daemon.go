@@ -58,6 +58,7 @@ type Container struct {
 	UUID        string    `json:"uuid"`
 	Player      string    `json:"player"`
 	Role        string    `json:"role"`
+	Description string    `json:"description,omitempty"`
 	ContainerID string    `json:"container_id"`
 	Status      string    `json:"status"`    // "running", "stopped"
 	Workspace   string    `json:"workspace"` // "shared" or "clone"
@@ -393,6 +394,7 @@ func (d *Daemon) handleStatusOne(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"uuid":         dal.UUID,
 		"name":         dal.Name,
+		"description":  dal.Description,
 		"player":       dal.Player,
 		"role":         dal.Role,
 		"skills":       dal.Skills,
@@ -465,6 +467,7 @@ func (d *Daemon) handleWake(w http.ResponseWriter, r *http.Request) {
 		UUID:        dal.UUID,
 		Player:      dal.Player,
 		Role:        dal.Role,
+		Description: dal.Description,
 		ContainerID: containerID,
 		Status:      "running",
 		Workspace:   ws,
@@ -681,6 +684,7 @@ func (d *Daemon) runSync() (synced, restarted []string) {
 				UUID:        dal.UUID,
 				Player:      dal.Player,
 				Role:        dal.Role,
+				Description: dal.Description,
 				ContainerID: newID,
 				Status:      "running",
 				Skills:      len(dal.Skills),
@@ -1064,6 +1068,7 @@ func (d *Daemon) reconcile() {
 				UUID:        dal.UUID,
 				Player:      dal.Player,
 				Role:        dal.Role,
+				Description: dal.Description,
 				ContainerID: c.ID,
 				Status:      "running",
 				Skills:      len(dal.Skills),
