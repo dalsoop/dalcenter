@@ -183,6 +183,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// Start leader health watcher (auto-recovery)
 	go d.startLeaderWatcher(ctx)
 
+	// Start queue manager (task expiry + concurrency limits)
+	go d.startQueueManager(ctx)
+
 	if d.bridgeURL != "" {
 		log.Printf("[daemon] matterbridge URL: %s", d.bridgeURL)
 	}
