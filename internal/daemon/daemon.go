@@ -414,19 +414,16 @@ func (d *Daemon) handleWake(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Support multiple instances: dev, dev-2, dev-3, ...
-	instanceName := name
-	d.mu.Lock()
-	if _, ok := d.containers[name]; ok {
-		for i := 2; ; i++ {
-			candidate := fmt.Sprintf("%s-%d", name, i)
-			if _, ok := d.containers[candidate]; !ok {
-				instanceName = candidate
-				break
-			}
-		}
+	// Reject wake if this dal is already running (#532)
+	d.mu.RLock()
+	if existing, ok := d.containers[name]; ok && existing.Status == "running" {
+		d.mu.RUnlock()
+		http.Error(w, fmt.Sprintf("dal %q is already running (container=%s)", name, existing.ContainerID), http.StatusConflict)
+		return
 	}
-	d.mu.Unlock()
+	d.mu.RUnlock()
+
+	instanceName := name
 
 	// Clean any stopped container with the same name (best-effort, #33)
 	targetContainerName := dalContainerName(instanceName, dal.UUID)
