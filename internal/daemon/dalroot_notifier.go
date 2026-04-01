@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,7 @@ const (
 	defaultNotifyPollInterval = 2 * time.Minute
 	reminderInitialDelay      = 5 * time.Minute
 	reminderMaxDelay          = 30 * time.Minute
+	notifyFilePrefix          = "notify-"
 )
 
 // dalrootPending tracks an action awaiting dalroot completion.
@@ -33,14 +35,17 @@ type dalrootPending struct {
 type dalrootNotifier struct {
 	mu       sync.Mutex
 	pending  map[int]*dalrootPending
+	notified map[int]bool // issue number -> already notified (survives restart)
 	filePath string
 }
 
 func newDalrootNotifier(path string) *dalrootNotifier {
 	n := &dalrootNotifier{
 		pending:  make(map[int]*dalrootPending),
+		notified: make(map[int]bool),
 		filePath: path,
 	}
+	// Load pending items
 	var items []*dalrootPending
 	if err := loadJSON(path, &items); err == nil {
 		for _, p := range items {
@@ -49,39 +54,50 @@ func newDalrootNotifier(path string) *dalrootNotifier {
 			}
 		}
 	}
+	// Load notified set
+	var notifiedList []int
+	notifiedPath := strings.TrimSuffix(path, ".json") + "-notified.json"
+	if err := loadJSON(notifiedPath, &notifiedList); err == nil {
+		for _, num := range notifiedList {
+			n.notified[num] = true
+		}
+	}
 	return n
 }
 
-func (n *dalrootNotifier) save() {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+// saveLocked persists state. Caller MUST NOT hold mu (no lock inside).
+func (n *dalrootNotifier) saveLocked() {
 	items := make([]*dalrootPending, 0, len(n.pending))
 	for _, p := range n.pending {
 		items = append(items, p)
 	}
 	persistJSON(n.filePath, items, nil)
+
+	// Save notified set separately
+	notifiedPath := strings.TrimSuffix(n.filePath, ".json") + "-notified.json"
+	notifiedList := make([]int, 0, len(n.notified))
+	for num := range n.notified {
+		notifiedList = append(notifiedList, num)
+	}
+	// Keep only last 500 to avoid unbounded growth
+	if len(notifiedList) > 500 {
+		notifiedList = notifiedList[len(notifiedList)-500:]
+	}
+	persistJSON(notifiedPath, notifiedList, nil)
 }
 
-// NotifyDalroot sends a message to dalroot via dalbridge or dalroot-tell.
+// NotifyDalroot sends a message to dalroot. Writes to a file that the host polls.
 func NotifyDalroot(msg string) error {
-	// Try dalroot-tell first (host-level command)
-	cmd := exec.Command("dalroot-tell", "dalroot", msg)
-	if out, err := cmd.CombinedOutput(); err == nil {
-		log.Printf("[dalroot-notifier] sent via dalroot-tell: %s", strings.TrimSpace(string(out)))
-		return nil
+	notifDir := "/workspace/dalroot-notifications"
+	if err := os.MkdirAll(notifDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", notifDir, err)
 	}
 
-	// Fallback: write to notification file that dalroot-listener picks up
-	notifDir := "/workspace/dalroot-notifications"
-	cmd = exec.Command("bash", "-c", fmt.Sprintf(
-		`mkdir -p %s && echo '%s' > %s/notify-%d.txt`,
-		notifDir,
-		strings.ReplaceAll(msg, "'", "'\\''"),
-		notifDir,
-		time.Now().UnixMilli(),
-	))
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("notification fallback failed: %s: %w", string(out), err)
+	filename := fmt.Sprintf("%s%d.txt", notifyFilePrefix, time.Now().UnixMilli())
+	path := filepath.Join(notifDir, filename)
+
+	if err := os.WriteFile(path, []byte(msg+"\n"), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
 	}
 
 	log.Printf("[dalroot-notifier] sent via file: %s", msg)
@@ -141,19 +157,18 @@ func (d *Daemon) checkClosedIssues(repo string, n *dalrootNotifier) {
 		return
 	}
 
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
 	for _, issue := range issues {
-		// Only notify for recently closed issues (within last poll interval * 2)
-		if time.Since(issue.ClosedAt) > defaultNotifyPollInterval*2 {
+		// Only notify for recently closed issues (within last 10 minutes)
+		if time.Since(issue.ClosedAt) > 10*time.Minute {
 			continue
 		}
 
-		// Check if already notified (use issue store from watcher)
-		key := fmt.Sprintf("closed-%d", issue.Number)
-		if d.issues.Seen(issue.Number) {
-			tracked := d.issues.issues[issue.Number]
-			if tracked != nil && tracked.Status == "closed-notified" {
-				continue
-			}
+		// Skip if already notified (persisted across restarts)
+		if n.notified[issue.Number] {
+			continue
 		}
 
 		msg := fmt.Sprintf("[@dalroot] #%d closed: %s (by %s)",
@@ -164,18 +179,11 @@ func (d *Daemon) checkClosedIssues(repo string, n *dalrootNotifier) {
 			continue
 		}
 
-		// Mark as notified
-		d.issues.Track(&trackedIssue{
-			Number:     issue.Number,
-			Title:      issue.Title,
-			Author:     issue.Author.Login,
-			DetectedAt: time.Now().UTC(),
-			Status:     "closed-notified",
-		})
-
-		_ = key // suppress unused
+		n.notified[issue.Number] = true
 		log.Printf("[dalroot-notifier] notified: #%d closed", issue.Number)
 	}
+
+	n.saveLocked()
 }
 
 // AddDalrootPending registers a pending action for dalroot to complete.
@@ -185,7 +193,6 @@ func (d *Daemon) AddDalrootPending(issueNumber int, title, message string) {
 	}
 	n := d.dalrootNotifier
 	n.mu.Lock()
-	defer n.mu.Unlock()
 	n.pending[issueNumber] = &dalrootPending{
 		IssueNumber: issueNumber,
 		Title:       title,
@@ -193,7 +200,8 @@ func (d *Daemon) AddDalrootPending(issueNumber int, title, message string) {
 		CreatedAt:   time.Now().UTC(),
 		LastRemind:  time.Now().UTC(),
 	}
-	n.save()
+	n.saveLocked()
+	n.mu.Unlock()
 }
 
 // checkReminders sends reminders for pending dalroot actions with exponential backoff.
@@ -201,17 +209,19 @@ func (d *Daemon) checkReminders(n *dalrootNotifier) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
+	dirty := false
 	for num, p := range n.pending {
 		if p.Resolved {
 			continue
 		}
 
-		// Calculate backoff delay: 5m, 15m, 30m, 30m, ...
+		// Backoff: 5m, 10m, 20m, 30m, 30m, ...
 		delay := reminderInitialDelay
-		for i := 0; i < p.RemindCount && delay < reminderMaxDelay; i++ {
+		for i := 0; i < p.RemindCount; i++ {
 			delay = delay * 2
 			if delay > reminderMaxDelay {
 				delay = reminderMaxDelay
+				break
 			}
 		}
 
@@ -230,8 +240,11 @@ func (d *Daemon) checkReminders(n *dalrootNotifier) {
 
 		p.RemindCount++
 		p.LastRemind = time.Now().UTC()
+		dirty = true
 		log.Printf("[dalroot-notifier] reminder #%d sent for issue #%d", p.RemindCount, num)
 	}
 
-	n.save()
+	if dirty {
+		n.saveLocked()
+	}
 }
