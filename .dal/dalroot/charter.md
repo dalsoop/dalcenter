@@ -48,6 +48,7 @@ pct exec $CT -- dalcenter tell bridge-of-gaya-script "스크립트 검증해"
 | veilkey-selfhosted | 11190 | 6 | dalcenter@veilkey-selfhosted |
 | bridge-of-gaya-script | 11191 | 6 | dalcenter@bridge-of-gaya-script |
 | dal-qa-team | 11194 | 3 | dalcenter@dal-qa-team |
+| writing-style | 11196 | 3 | dalcenter@writing-style |
 
 ### dal 관리 명령
 
