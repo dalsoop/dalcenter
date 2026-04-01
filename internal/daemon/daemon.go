@@ -48,6 +48,7 @@ type Daemon struct {
 	costs          *costStore
 	issues         *issueStore
 	issueWorkflows *issueWorkflowStore
+	reminders      *dalrootReminderStore
 	registry       *Registry
 	startTime      time.Time
 }
@@ -92,6 +93,7 @@ func New(addr, localdalRoot, serviceRepo, bridgeURL, dalbridgeURL, bridgeConf, g
 		costs:          newCostStoreWithFile(filepath.Join(dataDir(serviceRepo), "costs.json"), orchestrationLogDir(serviceRepo)),
 		issues:         newIssueStore(filepath.Join(dataDir(serviceRepo), "issues_seen.json")),
 		issueWorkflows: newIssueWorkflowStore(),
+		reminders:      newDalrootReminderStore(),
 		registry:       newRegistry(serviceRepo),
 		credSyncLast: newCredentialSyncMap(),
 		startTime:    time.Now(),
@@ -179,6 +181,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	// Start GitHub issue watcher
 	go d.startIssueWatcher(ctx, d.githubRepo, defaultIssuePollInterval)
+
+	// Start dalroot reminder (backoff notifications for pending issues)
+	go d.startDalrootReminder(ctx)
 
 	// Start leader health watcher (auto-recovery)
 	go d.startLeaderWatcher(ctx)

@@ -48,6 +48,7 @@ type trackedIssue struct {
 	TaskID     string    `json:"task_id,omitempty"` // task ID dispatched to leader
 	Status     string    `json:"status"`            // "dispatched", "skipped", "error"
 	Error      string    `json:"error,omitempty"`
+	LastState  string    `json:"last_state,omitempty"` // last known GitHub state ("OPEN", "CLOSED")
 }
 
 // issueStore tracks which issues have been seen and dispatched.
@@ -80,6 +81,12 @@ func (s *issueStore) Track(issue *trackedIssue) {
 	defer s.mu.Unlock()
 	s.issues[issue.Number] = issue
 	s.save()
+}
+
+func (s *issueStore) Get(number int) *trackedIssue {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.issues[number]
 }
 
 func (s *issueStore) List() []*trackedIssue {
@@ -145,6 +152,9 @@ func (d *Daemon) startIssueWatcher(ctx context.Context, repo string, interval ti
 	}
 
 	d.pollGitHubIssues(repo)
+	d.pollClosedIssues(repo)
+	d.pollMergedPRs(repo)
+	d.pollDalrootMentions(repo)
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -156,6 +166,9 @@ func (d *Daemon) startIssueWatcher(ctx context.Context, repo string, interval ti
 			return
 		case <-ticker.C:
 			d.pollGitHubIssues(repo)
+			d.pollClosedIssues(repo)
+			d.pollMergedPRs(repo)
+			d.pollDalrootMentions(repo)
 		}
 	}
 }
@@ -166,6 +179,16 @@ func (d *Daemon) pollGitHubIssues(repo string) {
 	if err != nil {
 		log.Printf("[issue-watcher] fetch failed: %v", err)
 		return
+	}
+
+	// Detect reopened issues (CLOSED → OPEN transition)
+	for _, issue := range issues {
+		if tracked := d.issues.Get(issue.Number); tracked != nil && tracked.LastState == "CLOSED" {
+			tracked.LastState = "OPEN"
+			d.issues.Track(tracked)
+			d.notifyDalroot(fmt.Sprintf("[@dalroot] #%d reopen: %s (by %s)", issue.Number, issue.Title, issue.Author.Login))
+			log.Printf("[issue-watcher] state change: #%d CLOSED→OPEN", issue.Number)
+		}
 	}
 
 	var newCount int
@@ -186,6 +209,7 @@ func (d *Daemon) pollGitHubIssues(repo string) {
 			URL:        issue.URL,
 			Author:     issue.Author.Login,
 			DetectedAt: time.Now().UTC(),
+			LastState:  "OPEN",
 		}
 		for _, l := range issue.Labels {
 			tracked.Labels = append(tracked.Labels, l.Name)
@@ -201,6 +225,8 @@ func (d *Daemon) pollGitHubIssues(repo string) {
 			tracked.Status = "dispatched"
 			tracked.TaskID = taskID
 			log.Printf("[issue-watcher] dispatched #%d → leader (task=%s)", issue.Number, taskID)
+			// Register reminder for dalroot tracking
+			d.reminders.Add(issue.Number, issue.Title, issue.Author.Login)
 		}
 
 		d.issues.Track(tracked)
