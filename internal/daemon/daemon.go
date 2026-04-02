@@ -191,6 +191,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// Start queue manager (task expiry + concurrency limits)
 	go d.startQueueManager(ctx)
 
+	// Start heartbeat (prevent leader Claude Code idle timeout)
+	go d.startHeartbeat(ctx)
+
 	// Start ops watcher (poll all teams, auto-wake empty teams)
 	if opsWatcherEnabled() {
 		go d.startOpsWatcher(ctx)
