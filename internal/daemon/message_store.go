@@ -205,7 +205,9 @@ func (s *messageStore) persistLocked() {
 		log.Printf("[persist] write error for %s: %v", filepath.Base(s.file), err)
 		return
 	}
-	os.Rename(tmp, s.file)
+	if err := os.Rename(tmp, s.file); err != nil {
+		log.Printf("[persist] rename error for %s: %v", filepath.Base(s.file), err)
+	}
 }
 
 // Flush is a no-op kept for API compatibility.
