@@ -93,7 +93,15 @@ func main() {
 	webhookToken := os.Getenv("DALBRIDGE_WEBHOOK_TOKEN")
 
 	b := newBroker()
+	rr := newRoomRegistry()
+	dt := newDeliveryTracker()
 	mux := http.NewServeMux()
+
+	// Room 관리 엔드포인트
+	registerRoomHandlers(mux, rr, dt)
+
+	// Delivery 상태 조회 엔드포인트
+	registerDeliveryHandlers(mux, dt)
 
 	// POST /webhook — Mattermost outgoing webhook 수신
 	mux.HandleFunc("/webhook", func(w http.ResponseWriter, r *http.Request) {
@@ -147,6 +155,17 @@ func main() {
 		}
 
 		b.broadcast(data)
+
+		// Room 라우팅: channel_name과 매칭되는 room에 전달
+		if rooms := rr.findByChannel(payload.ChannelName); len(rooms) > 0 {
+			for _, rm := range rooms {
+				rm.broker.broadcast(data)
+				log.Printf("[webhook→room:%s] %s: %s (%d subscribers)",
+					rm.Name, payload.UserName,
+					truncate(payload.Text, 80), rm.broker.clientCount())
+			}
+		}
+
 		log.Printf("[webhook] %s@%s: %s (%d clients)",
 			payload.UserName, payload.ChannelName,
 			truncate(payload.Text, 80), b.clientCount())
