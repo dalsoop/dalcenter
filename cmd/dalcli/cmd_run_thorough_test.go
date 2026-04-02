@@ -8,6 +8,17 @@ import (
 	"time"
 )
 
+// stubResolveProvider replaces resolveProvider with one that returns /bin/echo,
+// so tests never launch real claude/codex binaries. Returns a cleanup function.
+func stubResolveProvider(t *testing.T) {
+	t.Helper()
+	orig := resolveProvider
+	resolveProvider = func(player string) (string, error) {
+		return "/bin/echo", nil
+	}
+	t.Cleanup(func() { resolveProvider = orig })
+}
+
 // ══════════════════════════════════════════════════════════════
 // parseInterval: edge cases
 // ══════════════════════════════════════════════════════════════
@@ -169,6 +180,7 @@ func TestExtractTask_UnicodeContent(t *testing.T) {
 // ══════════════════════════════════════════════════════════════
 
 func TestRunClaude_ExtraBashWildcard(t *testing.T) {
+	stubResolveProvider(t)
 	os.Setenv("DAL_PLAYER", "claude")
 	os.Setenv("DAL_ROLE", "member")
 	os.Setenv("DAL_EXTRA_BASH", "*")
@@ -185,6 +197,7 @@ func TestRunClaude_ExtraBashWildcard(t *testing.T) {
 }
 
 func TestRunClaude_ExtraBashSpecific(t *testing.T) {
+	stubResolveProvider(t)
 	os.Setenv("DAL_PLAYER", "claude")
 	os.Setenv("DAL_ROLE", "member")
 	os.Setenv("DAL_EXTRA_BASH", "go,npm")
@@ -200,6 +213,7 @@ func TestRunClaude_ExtraBashSpecific(t *testing.T) {
 }
 
 func TestRunClaude_LeaderRole(t *testing.T) {
+	stubResolveProvider(t)
 	os.Setenv("DAL_PLAYER", "claude")
 	os.Setenv("DAL_ROLE", "leader")
 	os.Setenv("DAL_EXTRA_BASH", "")
@@ -215,6 +229,7 @@ func TestRunClaude_LeaderRole(t *testing.T) {
 }
 
 func TestRunClaude_MaxDurationEnv(t *testing.T) {
+	stubResolveProvider(t)
 	os.Setenv("DAL_PLAYER", "claude")
 	os.Setenv("DAL_ROLE", "member")
 	os.Setenv("DAL_MAX_DURATION", "500ms")
@@ -234,6 +249,7 @@ func TestRunClaude_MaxDurationEnv(t *testing.T) {
 }
 
 func TestRunClaude_InvalidMaxDuration(t *testing.T) {
+	stubResolveProvider(t)
 	os.Setenv("DAL_PLAYER", "claude")
 	os.Setenv("DAL_ROLE", "member")
 	os.Setenv("DAL_MAX_DURATION", "not-a-duration")
@@ -252,6 +268,7 @@ func TestRunClaude_InvalidMaxDuration(t *testing.T) {
 // ══════════════════════════════════════════════════════════════
 
 func TestExecuteTask_SuccessKeepsCircuitClosed(t *testing.T) {
+	stubResolveProvider(t)
 	providerCircuit = NewCircuitBreaker(3, 2*time.Minute)
 	defer func() { providerCircuit = NewCircuitBreaker(3, 2*time.Minute) }()
 
@@ -323,6 +340,7 @@ func TestIsActiveThread_EmptyMap(t *testing.T) {
 // ══════════════════════════════════════════════════════════════
 
 func TestRunProvider_DispatchesToRunClaude(t *testing.T) {
+	stubResolveProvider(t)
 	os.Setenv("DAL_ROLE", "member")
 	os.Setenv("DAL_MAX_DURATION", "1s")
 	defer func() {

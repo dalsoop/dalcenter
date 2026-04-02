@@ -41,6 +41,9 @@ var credentialRefreshCooldown = struct {
 
 var workspaceDir = "/workspace"
 
+// resolveProvider wraps providerexec.Resolve; tests override this to avoid real binary execution.
+var resolveProvider = providerexec.Resolve
+
 func shouldNotifyCredentialRefresh(dalName string) bool {
 	if dalName == "" {
 		return false
@@ -1345,7 +1348,7 @@ func runClaude(player, task string) (string, error) {
 	var cmd *exec.Cmd
 	switch player {
 	case "codex":
-		codexPath, err := providerexec.Resolve("codex")
+		codexPath, err := resolveProvider("codex")
 		if err != nil {
 			return "", err
 		}
@@ -1355,7 +1358,7 @@ func runClaude(player, task string) (string, error) {
 			"-C", workDir,
 			task)
 	default: // claude
-		claudePath, err := providerexec.Resolve("claude")
+		claudePath, err := resolveProvider("claude")
 		if err != nil {
 			return "", err
 		}

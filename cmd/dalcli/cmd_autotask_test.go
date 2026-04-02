@@ -7,7 +7,7 @@ import (
 )
 
 func TestRunAutoTaskOnly_ExitsWithoutClaude(t *testing.T) {
-	installFailingProviders(t)
+	stubResolveProvider(t)
 	// runAutoTaskOnly calls executeTask which calls claude
 	// Without claude binary, it should still run (fail task but not crash)
 	os.Setenv("DAL_PLAYER", "claude")
@@ -58,7 +58,7 @@ func TestRunAutoTaskOnly_DefaultInterval(t *testing.T) {
 }
 
 func TestAutoTaskOnlyMode_TriggeredWhenMMUnavailable(t *testing.T) {
-	installFailingProviders(t)
+	stubResolveProvider(t)
 	// When MM is not available and DAL_AUTO_TASK is set,
 	// runAgentLoop should enter auto-task-only mode
 	os.Setenv("DAL_PLAYER", "claude")

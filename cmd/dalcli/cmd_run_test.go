@@ -727,20 +727,17 @@ func TestFetchAgentConfig_ServerError(t *testing.T) {
 // ── executeTask role branching (verify command construction) ──
 
 func TestExecuteTask_RoleBranching(t *testing.T) {
-	installFailingProviders(t)
-	// We can't actually run claude in tests, but we verify the function
-	// handles missing binary gracefully
+	stubResolveProvider(t)
 	os.Setenv("DAL_ROLE", "member")
 	_, err := executeTask("test")
-	// Should fail (claude not available in test) but not panic
-	if err == nil {
-		t.Log("claude available in test env — unusual but ok")
+	if err != nil {
+		t.Logf("member role: %v", err)
 	}
 
 	os.Setenv("DAL_ROLE", "leader")
 	_, err = executeTask("test")
-	if err == nil {
-		t.Log("claude available in test env — unusual but ok")
+	if err != nil {
+		t.Logf("leader role: %v", err)
 	}
 	os.Unsetenv("DAL_ROLE")
 }
@@ -849,22 +846,26 @@ func TestIsRetryable(t *testing.T) {
 // ── executeTask retry (no claude binary → fails fast, not retryable) ──
 
 func TestExecuteTask_NonRetryable_NoLoop(t *testing.T) {
-	installFailingProviders(t)
+	// Use a provider that fails instantly (exit 1) to verify no retry loop
+	orig := resolveProvider
+	resolveProvider = func(player string) (string, error) {
+		return "/bin/false", nil
+	}
+	t.Cleanup(func() { resolveProvider = orig })
+
 	os.Setenv("DAL_ROLE", "member")
 	os.Setenv("DAL_PLAYER", "claude")
 	defer os.Unsetenv("DAL_ROLE")
 	defer os.Unsetenv("DAL_PLAYER")
 
-	// claude not available → error → NOT retryable → returns after 1 try
 	start := time.Now()
 	_, err := executeTask("test")
 	elapsed := time.Since(start)
 
 	if err == nil {
-		t.Log("claude available — skip")
+		t.Log("/bin/false succeeded — unexpected but ok")
 		return
 	}
-	// Should return fast (< 5s), not wait 30s for retry
 	if elapsed > 10*time.Second {
 		t.Errorf("took %s — seems like retry loop on non-retryable error", elapsed)
 	}
@@ -873,12 +874,12 @@ func TestExecuteTask_NonRetryable_NoLoop(t *testing.T) {
 // ── runProvider player branching ──
 
 func TestRunProvider_Codex(t *testing.T) {
+	stubResolveProvider(t)
 	os.Setenv("DAL_PLAYER", "codex")
 	os.Setenv("DAL_ROLE", "member")
 	defer os.Unsetenv("DAL_PLAYER")
 	defer os.Unsetenv("DAL_ROLE")
 
-	// codex not available in test → just verify it doesn't panic
 	_, err := runClaude(os.Getenv("DAL_PLAYER"), "test")
 	if err == nil {
 		t.Log("codex available — unusual but ok")
@@ -886,6 +887,7 @@ func TestRunProvider_Codex(t *testing.T) {
 }
 
 func TestRunProvider_Claude_Leader(t *testing.T) {
+	stubResolveProvider(t)
 	os.Setenv("DAL_PLAYER", "claude")
 	os.Setenv("DAL_ROLE", "leader")
 	defer os.Unsetenv("DAL_PLAYER")
@@ -898,6 +900,7 @@ func TestRunProvider_Claude_Leader(t *testing.T) {
 }
 
 func TestRunProvider_Claude_Member(t *testing.T) {
+	stubResolveProvider(t)
 	os.Setenv("DAL_PLAYER", "claude")
 	os.Setenv("DAL_ROLE", "member")
 	defer os.Unsetenv("DAL_PLAYER")
