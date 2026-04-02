@@ -17,8 +17,9 @@ import (
 
 func newRegisterCmd() *cobra.Command {
 	var (
-		bridgeURL string
-		port      int
+		bridgeURL    string
+		dalbridgeURL string
+		port         int
 	)
 	cmd := &cobra.Command{
 		Use:   "register <repo-path>",
@@ -47,7 +48,7 @@ func newRegisterCmd() *cobra.Command {
 				port = nextAvailablePort()
 			}
 			serviceName := systemdInstanceName(repoName)
-			if err := installSystemdService(serviceName, repoName, repoPath, port, bridgeURL); err != nil {
+			if err := installSystemdService(serviceName, repoName, repoPath, port, bridgeURL, dalbridgeURL); err != nil {
 				return fmt.Errorf("systemd: %w", err)
 			}
 			fmt.Printf("[2/6] systemd service: %s (port %d)\n", serviceName, port)
@@ -82,6 +83,7 @@ func newRegisterCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&bridgeURL, "bridge-url", envOrDefault("DALCENTER_BRIDGE_URL", daemon.DefaultBridgeURL), "Matterbridge API URL")
+	cmd.Flags().StringVar(&dalbridgeURL, "dalbridge-url", os.Getenv("DALCENTER_DALBRIDGE_URL"), "Dalbridge URL for dal containers")
 	cmd.Flags().IntVar(&port, "port", 0, "Listen port (default: auto-assign next available)")
 	return cmd
 }
@@ -168,7 +170,7 @@ func nextAvailablePort() int {
 
 // installSystemdService installs the dalcenter@ template (if needed),
 // writes /etc/dalcenter/<repo>.env, and enables the instance.
-func installSystemdService(serviceName, repoName, repoPath string, port int, bridgeURL string) error {
+func installSystemdService(serviceName, repoName, repoPath string, port int, bridgeURL, dalbridgeURL string) error {
 	// Ensure template unit exists
 	if err := installTemplateUnit(); err != nil {
 		return fmt.Errorf("install template: %w", err)
@@ -180,8 +182,8 @@ func installSystemdService(serviceName, repoName, repoPath string, port int, bri
 		return fmt.Errorf("create config dir: %w", err)
 	}
 
-	envContent := fmt.Sprintf("DALCENTER_PORT=%d\nDALCENTER_REPO=%s\nDALCENTER_LOCALDAL_PATH=%s/.dal\nDALCENTER_BRIDGE_URL=%s\n",
-		port, repoPath, repoPath, bridgeURL)
+	envContent := fmt.Sprintf("DALCENTER_PORT=%d\nDALCENTER_REPO=%s\nDALCENTER_LOCALDAL_PATH=%s/.dal\nDALCENTER_BRIDGE_URL=%s\nDALCENTER_DALBRIDGE_URL=%s\n",
+		port, repoPath, repoPath, bridgeURL, dalbridgeURL)
 
 	envPath := filepath.Join(configDir, repoName+".env")
 	if err := os.WriteFile(envPath, []byte(envContent), 0644); err != nil {

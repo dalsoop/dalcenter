@@ -288,7 +288,10 @@ func resolveBridgeURL(team string) (string, error) {
 		}
 	}
 
-	// 2. Team env file: DALCENTER_BRIDGE_URL in /etc/dalcenter/<team>.env
+	// 2. Team env file: prefer DALCENTER_DALBRIDGE_URL, fall back to DALCENTER_BRIDGE_URL
+	if url := readEnvVar(paths.ConfigDir(), team+".env", "DALCENTER_DALBRIDGE_URL"); url != "" {
+		return strings.TrimRight(url, "/"), nil
+	}
 	if url := readEnvVar(paths.ConfigDir(), team+".env", "DALCENTER_BRIDGE_URL"); url != "" {
 		return strings.TrimRight(url, "/"), nil
 	}
