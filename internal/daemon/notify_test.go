@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -49,6 +50,48 @@ func TestBuildNotifyPayload_Failed(t *testing.T) {
 	}
 	if p.Error == "" {
 		t.Error("expected error content in payload")
+	}
+}
+
+func TestBuildNotifyPayload_WithInstanceID(t *testing.T) {
+	tests := []struct {
+		name       string
+		dalName    string
+		instanceID string
+		status     string
+		wantID     string
+	}{
+		{
+			name:       "non-empty instance ID",
+			dalName:    "worker",
+			instanceID: "inst-def456",
+			status:     "done",
+			wantID:     "inst-def456",
+		},
+		{
+			name:       "empty instance ID",
+			dalName:    "worker",
+			instanceID: "",
+			status:     "done",
+			wantID:     "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tr := &taskResult{
+				ID:     "task-010",
+				Dal:    tt.dalName,
+				Task:   "test task",
+				Status: tt.status,
+			}
+			p := buildNotifyPayload(tt.dalName, tt.instanceID, tr)
+			if p.InstanceID != tt.wantID {
+				t.Errorf("expected instance_id=%q, got %q", tt.wantID, p.InstanceID)
+			}
+			if p.Dal != tt.dalName {
+				t.Errorf("expected dal=%q, got %q", tt.dalName, p.Dal)
+			}
+		})
 	}
 }
 
@@ -134,12 +177,13 @@ func TestSendNotifyHTTP(t *testing.T) {
 
 func TestNotifyPayload_JSONSerialization(t *testing.T) {
 	p := NotifyPayload{
-		Event:  "task_done",
-		Dal:    "leader",
-		TaskID: "task-001",
-		Task:   "run tests",
-		Status: "done",
-		PRUrl:  "https://github.com/org/repo/pull/1",
+		Event:      "task_done",
+		Dal:        "leader",
+		InstanceID: "inst-serial01",
+		TaskID:     "task-001",
+		Task:       "run tests",
+		Status:     "done",
+		PRUrl:      "https://github.com/org/repo/pull/1",
 	}
 	data, err := json.Marshal(p)
 	if err != nil {
@@ -154,5 +198,25 @@ func TestNotifyPayload_JSONSerialization(t *testing.T) {
 	}
 	if decoded.Event != "task_done" {
 		t.Errorf("event lost in round-trip: got %q", decoded.Event)
+	}
+	if decoded.InstanceID != "inst-serial01" {
+		t.Errorf("instance_id lost in round-trip: got %q", decoded.InstanceID)
+	}
+}
+
+func TestNotifyPayload_JSONOmitsEmptyInstanceID(t *testing.T) {
+	p := NotifyPayload{
+		Event:  "task_done",
+		Dal:    "worker",
+		TaskID: "task-099",
+		Task:   "clean up",
+		Status: "done",
+	}
+	data, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "instance_id") {
+		t.Errorf("expected instance_id to be omitted when empty, got: %s", string(data))
 	}
 }
