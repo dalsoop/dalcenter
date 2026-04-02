@@ -43,7 +43,7 @@ Use --no-wake to disable auto-wake when the target dal is idle.`,
 
 			// Auto-wake: check target dal idle time and restart if needed
 			var wakeNote string
-			if !noWake {
+			if !noWake && !direct {
 				targetURL, err := resolveRepoURL(team)
 				if err != nil {
 					return fmt.Errorf("resolve repo URL: %w", err)
