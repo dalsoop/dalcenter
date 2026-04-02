@@ -766,6 +766,61 @@ func (c *Client) PipelineSync(paneID, message string) ([]PipelineMessage, error)
 	return result.Messages, nil
 }
 
+// OpsInvoke executes an ops skill via the dalcenter gateway.
+func (c *Client) OpsInvoke(dal, skill string, params map[string]any) (*OpsInvokeResult, error) {
+	payload := map[string]any{
+		"skill":  skill,
+		"params": params,
+		"dal":    dal,
+	}
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/ops/invoke", strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiToken)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("daemon unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	var result OpsInvokeResult
+	json.Unmarshal(b, &result)
+	if resp.StatusCode >= 400 && result.Error == "" {
+		result.Error = strings.TrimSpace(string(b))
+	}
+	return &result, nil
+}
+
+// OpsInvokeResult holds the response from an ops skill invocation.
+type OpsInvokeResult struct {
+	OK     bool           `json:"ok"`
+	Skill  string         `json:"skill"`
+	Result map[string]any `json:"result,omitempty"`
+	Error  string         `json:"error,omitempty"`
+}
+
+// OpsSkills returns available ops skills from the gateway.
+func (c *Client) OpsSkills() ([]map[string]any, error) {
+	resp, err := c.http.Get(c.baseURL + "/api/ops/skills")
+	if err != nil {
+		return nil, fmt.Errorf("daemon unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Skills []map[string]any `json:"skills"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+	return result.Skills, nil
+}
+
 // PipelineHealth returns pipeline health status.
 func (c *Client) PipelineHealth() (*PipelineHealth, error) {
 	resp, err := c.http.Get(c.baseURL + "/api/pipeline/health")

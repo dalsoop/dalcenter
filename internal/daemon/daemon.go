@@ -290,6 +290,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 	mux.HandleFunc("GET /api/issue-workflow/{id}", d.handleIssueWorkflowStatus)
 	mux.HandleFunc("GET /api/issue-workflows", d.handleIssueWorkflowList)
 
+	// Ops skill gateway
+	mux.HandleFunc("POST /api/ops/invoke", d.requireAuth(d.handleOpsInvoke))
+	mux.HandleFunc("GET /api/ops/skills", d.handleOpsSkills)
+
 	// Pipeline endpoints
 	mux.HandleFunc("POST /api/pipeline/init", d.requireAuth(d.handlePipelineInit))
 	mux.HandleFunc("POST /api/pipeline/send", d.requireAuth(d.handlePipelineSend))
