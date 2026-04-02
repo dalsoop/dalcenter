@@ -504,3 +504,9 @@ PR: https://githu...
 - `cmd/dalcenter/cmd_tell.go:116` — `sendViaDalcenter`에서 `message = "@dal-leader " ...
 **다음:** 
 **주의:** 
+
+### 2026-04-02: #531 다중 인스턴스 UUID 중복 문제 해결
+**상태:** done
+**결과:** PR #685 생성. Container에 InstanceID 필드 추가, id.go 재구성 (6파일, +60/-29)
+**다음:**
+**주의:**
