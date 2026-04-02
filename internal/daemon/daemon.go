@@ -172,6 +172,17 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}
 	}
 
+	// Check for shared bridge tokens across teams (self-message bug)
+	if dupes := CheckBridgeTokens(); dupes != nil {
+		for token, teams := range dupes {
+			masked := token
+			if len(masked) > 8 {
+				masked = masked[:4] + "..." + masked[len(masked)-4:]
+			}
+			log.Printf("[daemon] WARNING: teams %v share the same MM bot token (%s) — self-message filtering will fail. See issue #578", teams, masked)
+		}
+	}
+
 	// Start credential watcher
 	go startCredentialWatcher(ctx, d)
 
