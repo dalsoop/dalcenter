@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -48,7 +49,6 @@ type BufferedMessage struct {
 // messageStore persists buffered messages to disk.
 type messageStore struct {
 	mu       sync.RWMutex
-	wg       sync.WaitGroup
 	messages []*BufferedMessage
 	file     string
 	seq      int
@@ -85,7 +85,7 @@ func (s *messageStore) New(from, to, message string) *BufferedMessage {
 	}
 	s.messages = append(s.messages, m)
 	s.evictLocked()
-	s.persistAsync()
+	s.persistLocked()
 	return m
 }
 
@@ -97,7 +97,7 @@ func (s *messageStore) MarkSent(id string) {
 		now := time.Now().UTC()
 		m.Status = MessageSent
 		m.SentAt = &now
-		s.persistAsync()
+		s.persistLocked()
 	}
 }
 
@@ -112,7 +112,7 @@ func (s *messageStore) MarkAcked(id string) bool {
 	now := time.Now().UTC()
 	m.Status = MessageAcked
 	m.AckedAt = &now
-	s.persistAsync()
+	s.persistLocked()
 	return true
 }
 
@@ -123,7 +123,7 @@ func (s *messageStore) MarkFailed(id, errMsg string) {
 	if m := s.findLocked(id); m != nil {
 		m.Status = MessageFailed
 		m.Error = errMsg
-		s.persistAsync()
+		s.persistLocked()
 	}
 }
 
@@ -137,7 +137,7 @@ func (s *messageStore) IncrRetry(id string) int {
 	}
 	m.Retries++
 	m.Status = MessagePending
-	s.persistAsync()
+	s.persistLocked()
 	return m.Retries
 }
 
@@ -176,7 +176,7 @@ func (s *messageStore) TimedOut() []*BufferedMessage {
 		}
 	}
 	if len(result) > 0 {
-		s.persistAsync()
+		s.persistLocked()
 	}
 	return result
 }
@@ -192,20 +192,26 @@ func (s *messageStore) List() []*BufferedMessage {
 	return result
 }
 
-// persistAsync writes messages to disk in a background goroutine.
+// persistLocked writes messages to disk synchronously.
 // Must be called with s.mu held.
-func (s *messageStore) persistAsync() {
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		persistJSON(s.file, s.messages, &s.mu)
-	}()
+func (s *messageStore) persistLocked() {
+	b, err := json.MarshalIndent(s.messages, "", "  ")
+	if err != nil {
+		log.Printf("[persist] marshal error for %s: %v", filepath.Base(s.file), err)
+		return
+	}
+	tmp := s.file + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		log.Printf("[persist] write error for %s: %v", filepath.Base(s.file), err)
+		return
+	}
+	os.Rename(tmp, s.file)
 }
 
-// Flush waits for all in-flight persistence operations to complete.
-func (s *messageStore) Flush() {
-	s.wg.Wait()
-}
+// Flush is a no-op kept for API compatibility.
+// Persistence is now synchronous, so all writes complete before the
+// mutating method returns.
+func (s *messageStore) Flush() {}
 
 func (s *messageStore) findLocked(id string) *BufferedMessage {
 	for _, m := range s.messages {
