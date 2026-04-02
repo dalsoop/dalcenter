@@ -2,17 +2,19 @@ package daemon
 
 import (
 	"context"
-	"log"
-	"net"
-	"os"
-	"os/exec"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
+	"net"
 	"net/http"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/dalsoop/dalcenter/internal/paths"
 )
 
 // startMatterbridge starts matterbridge as a child process.
@@ -109,6 +111,107 @@ func (d *Daemon) mmPost(text string) error {
 		return fmt.Errorf("mm post %d: %s", resp.StatusCode, string(respBody))
 	}
 	return nil
+}
+
+// parseBridgeToken reads the MM bot Token from a matterbridge TOML config.
+// It looks for lines like: Token = "xxx" under [mattermost.*] sections.
+func parseBridgeToken(confPath string) string {
+	data, err := os.ReadFile(confPath)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Token") && strings.Contains(line, "=") {
+			// Extract value: Token = "xxx" or Token="xxx"
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 {
+				val := strings.TrimSpace(parts[1])
+				val = strings.Trim(val, "\"")
+				if val != "" {
+					return val
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// bridgeTokenEntry holds team name and its bridge token for duplicate detection.
+type bridgeTokenEntry struct {
+	Team    string
+	Token   string
+	ConfPath string
+}
+
+// CheckBridgeTokens scans /etc/dalcenter/*.env for DALCENTER_BRIDGE_CONF paths,
+// extracts the MM bot token from each, and returns duplicate groups.
+// Returns nil if no duplicates found.
+func CheckBridgeTokens() map[string][]string {
+	configDir := paths.ConfigDir()
+	entries, err := os.ReadDir(configDir)
+	if err != nil {
+		return nil
+	}
+
+	var tokens []bridgeTokenEntry
+	for _, e := range entries {
+		if e.Name() == "common.env" || !strings.HasSuffix(e.Name(), ".env") {
+			continue
+		}
+		teamName := strings.TrimSuffix(e.Name(), ".env")
+		data, err := os.ReadFile(filepath.Join(configDir, e.Name()))
+		if err != nil {
+			continue
+		}
+
+		// Look for DALCENTER_BRIDGE_CONF in the env file
+		confPath := ""
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "DALCENTER_BRIDGE_CONF=") {
+				confPath = strings.TrimPrefix(line, "DALCENTER_BRIDGE_CONF=")
+				break
+			}
+		}
+		if confPath == "" {
+			// Try default path: /etc/dalcenter/<team>.matterbridge.toml
+			defaultConf := filepath.Join(configDir, teamName+".matterbridge.toml")
+			if _, err := os.Stat(defaultConf); err == nil {
+				confPath = defaultConf
+			}
+		}
+		if confPath == "" {
+			continue
+		}
+
+		token := parseBridgeToken(confPath)
+		if token != "" {
+			tokens = append(tokens, bridgeTokenEntry{
+				Team:     teamName,
+				Token:    token,
+				ConfPath: confPath,
+			})
+		}
+	}
+
+	// Group by token to find duplicates
+	groups := make(map[string][]string)
+	for _, t := range tokens {
+		groups[t.Token] = append(groups[t.Token], t.Team)
+	}
+
+	// Filter to only duplicates
+	dupes := make(map[string][]string)
+	for token, teams := range groups {
+		if len(teams) > 1 {
+			dupes[token] = teams
+		}
+	}
+	if len(dupes) == 0 {
+		return nil
+	}
+	return dupes
 }
 
 // resolveMMChannelID finds the MM channel ID from the matterbridge config.
