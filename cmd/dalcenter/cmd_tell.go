@@ -73,6 +73,9 @@ Use --no-ack to skip waiting for ACK (fire-and-forget mode).`,
 				}
 			}
 
+			// Prepend @dal-leader mention so the leader picks up the message
+			message = "@dal-leader " + message
+
 			if direct {
 				return sendViaBridge(team, message, wakeNote)
 			}
