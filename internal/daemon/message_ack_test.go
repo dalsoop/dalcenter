@@ -10,7 +10,9 @@ import (
 
 func TestHandleACK(t *testing.T) {
 	d, _ := setupTestDaemon(t)
-	d.messages = newMessageStore(filepath.Join(t.TempDir(), "messages.json"))
+	ms := newMessageStore(filepath.Join(t.TempDir(), "messages.json"))
+	t.Cleanup(ms.Flush)
+	d.messages = ms
 
 	// Create and send a message
 	m := d.messages.New("dalroot", "local", "test message")
@@ -42,7 +44,9 @@ func TestHandleACK(t *testing.T) {
 
 func TestHandleACK_NotFound(t *testing.T) {
 	d, _ := setupTestDaemon(t)
-	d.messages = newMessageStore(filepath.Join(t.TempDir(), "messages.json"))
+	ms := newMessageStore(filepath.Join(t.TempDir(), "messages.json"))
+	t.Cleanup(ms.Flush)
+	d.messages = ms
 
 	req := httptest.NewRequest(http.MethodPost, "/api/ack/nonexistent", nil)
 	req.SetPathValue("id", "nonexistent")
@@ -57,7 +61,9 @@ func TestHandleACK_NotFound(t *testing.T) {
 
 func TestHandleACK_EmptyID(t *testing.T) {
 	d, _ := setupTestDaemon(t)
-	d.messages = newMessageStore(filepath.Join(t.TempDir(), "messages.json"))
+	ms := newMessageStore(filepath.Join(t.TempDir(), "messages.json"))
+	t.Cleanup(ms.Flush)
+	d.messages = ms
 
 	req := httptest.NewRequest(http.MethodPost, "/api/ack/", nil)
 	req.SetPathValue("id", "")
@@ -72,7 +78,9 @@ func TestHandleACK_EmptyID(t *testing.T) {
 
 func TestHandleMessageList(t *testing.T) {
 	d, _ := setupTestDaemon(t)
-	d.messages = newMessageStore(filepath.Join(t.TempDir(), "messages.json"))
+	ms := newMessageStore(filepath.Join(t.TempDir(), "messages.json"))
+	t.Cleanup(ms.Flush)
+	d.messages = ms
 
 	d.messages.New("a", "b", "msg1")
 	m2 := d.messages.New("a", "b", "msg2")
@@ -110,7 +118,9 @@ func TestHandleMessageList(t *testing.T) {
 
 func TestHandleMessageStatus(t *testing.T) {
 	d, _ := setupTestDaemon(t)
-	d.messages = newMessageStore(filepath.Join(t.TempDir(), "messages.json"))
+	ms := newMessageStore(filepath.Join(t.TempDir(), "messages.json"))
+	t.Cleanup(ms.Flush)
+	d.messages = ms
 
 	m := d.messages.New("a", "b", "hello")
 
@@ -132,7 +142,9 @@ func TestHandleMessageStatus(t *testing.T) {
 
 func TestHandleMessageStatus_NotFound(t *testing.T) {
 	d, _ := setupTestDaemon(t)
-	d.messages = newMessageStore(filepath.Join(t.TempDir(), "messages.json"))
+	ms := newMessageStore(filepath.Join(t.TempDir(), "messages.json"))
+	t.Cleanup(ms.Flush)
+	d.messages = ms
 
 	req := httptest.NewRequest(http.MethodGet, "/api/messages/nope", nil)
 	req.SetPathValue("id", "nope")

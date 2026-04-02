@@ -6,9 +6,17 @@ import (
 	"time"
 )
 
-func TestMessageStore_NewAndGet(t *testing.T) {
+func newTestMessageStore(t *testing.T) (*messageStore, string) {
+	t.Helper()
 	dir := t.TempDir()
-	s := newMessageStore(filepath.Join(dir, "messages.json"))
+	file := filepath.Join(dir, "messages.json")
+	s := newMessageStore(file)
+	t.Cleanup(s.Flush)
+	return s, file
+}
+
+func TestMessageStore_NewAndGet(t *testing.T) {
+	s, _ := newTestMessageStore(t)
 
 	m := s.New("dalroot", "dalcenter", "hello world")
 	if m.ID != "msg-0001" {
@@ -31,8 +39,7 @@ func TestMessageStore_NewAndGet(t *testing.T) {
 }
 
 func TestMessageStore_MarkSent(t *testing.T) {
-	dir := t.TempDir()
-	s := newMessageStore(filepath.Join(dir, "messages.json"))
+	s, _ := newTestMessageStore(t)
 
 	m := s.New("a", "b", "msg")
 	s.MarkSent(m.ID)
@@ -47,9 +54,7 @@ func TestMessageStore_MarkSent(t *testing.T) {
 }
 
 func TestMessageStore_MarkAcked(t *testing.T) {
-	dir := t.TempDir()
-	s := newMessageStore(filepath.Join(dir, "messages.json"))
-	defer s.Flush()
+	s, _ := newTestMessageStore(t)
 
 	m := s.New("a", "b", "msg")
 	s.MarkSent(m.ID)
@@ -69,8 +74,7 @@ func TestMessageStore_MarkAcked(t *testing.T) {
 }
 
 func TestMessageStore_MarkAcked_NotFound(t *testing.T) {
-	dir := t.TempDir()
-	s := newMessageStore(filepath.Join(dir, "messages.json"))
+	s, _ := newTestMessageStore(t)
 
 	ok := s.MarkAcked("nonexistent")
 	if ok {
@@ -79,8 +83,7 @@ func TestMessageStore_MarkAcked_NotFound(t *testing.T) {
 }
 
 func TestMessageStore_MarkFailed(t *testing.T) {
-	dir := t.TempDir()
-	s := newMessageStore(filepath.Join(dir, "messages.json"))
+	s, _ := newTestMessageStore(t)
 
 	m := s.New("a", "b", "msg")
 	s.MarkFailed(m.ID, "network error")
@@ -95,8 +98,7 @@ func TestMessageStore_MarkFailed(t *testing.T) {
 }
 
 func TestMessageStore_IncrRetry(t *testing.T) {
-	dir := t.TempDir()
-	s := newMessageStore(filepath.Join(dir, "messages.json"))
+	s, _ := newTestMessageStore(t)
 
 	m := s.New("a", "b", "msg")
 	s.MarkSent(m.ID)
@@ -118,8 +120,7 @@ func TestMessageStore_IncrRetry(t *testing.T) {
 }
 
 func TestMessageStore_Pending(t *testing.T) {
-	dir := t.TempDir()
-	s := newMessageStore(filepath.Join(dir, "messages.json"))
+	s, _ := newTestMessageStore(t)
 
 	m1 := s.New("a", "b", "msg1")
 	s.New("a", "b", "msg2")
@@ -135,8 +136,7 @@ func TestMessageStore_Pending(t *testing.T) {
 }
 
 func TestMessageStore_TimedOut(t *testing.T) {
-	dir := t.TempDir()
-	s := newMessageStore(filepath.Join(dir, "messages.json"))
+	s, _ := newTestMessageStore(t)
 
 	m := s.New("a", "b", "msg")
 	// Manually set SentAt to past
@@ -156,8 +156,7 @@ func TestMessageStore_TimedOut(t *testing.T) {
 }
 
 func TestMessageStore_List(t *testing.T) {
-	dir := t.TempDir()
-	s := newMessageStore(filepath.Join(dir, "messages.json"))
+	s, _ := newTestMessageStore(t)
 
 	s.New("a", "b", "first")
 	s.New("a", "b", "second")
@@ -173,8 +172,7 @@ func TestMessageStore_List(t *testing.T) {
 }
 
 func TestMessageStore_Eviction(t *testing.T) {
-	dir := t.TempDir()
-	s := newMessageStore(filepath.Join(dir, "messages.json"))
+	s, _ := newTestMessageStore(t)
 
 	// Fill beyond max
 	for i := 0; i < maxBufferedMessages+10; i++ {
@@ -199,6 +197,7 @@ func TestMessageStore_Persistence(t *testing.T) {
 
 	// Load from disk
 	s2 := newMessageStore(file)
+	t.Cleanup(s2.Flush)
 	got := s2.Get(m.ID)
 	if got == nil {
 		t.Fatal("message not found after reload")
@@ -221,6 +220,7 @@ func TestMessageStore_SeqRestore(t *testing.T) {
 	s1.Flush()
 
 	s2 := newMessageStore(file)
+	t.Cleanup(s2.Flush)
 	m := s2.New("a", "b", "m3")
 	if m.ID != "msg-0003" {
 		t.Errorf("id after reload = %q, want %q", m.ID, "msg-0003")

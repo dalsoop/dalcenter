@@ -12,7 +12,9 @@ import (
 
 func testMessageStore(t *testing.T) *messageStore {
 	t.Helper()
-	return newMessageStore(filepath.Join(t.TempDir(), "messages.json"))
+	s := newMessageStore(filepath.Join(t.TempDir(), "messages.json"))
+	t.Cleanup(s.Flush)
+	return s
 }
 
 func TestHandleMessage_PostsViaBridge(t *testing.T) {
@@ -86,7 +88,6 @@ func TestHandleMessage_ReturnsStatusSent(t *testing.T) {
 	defer bridgeSrv.Close()
 
 	ms := testMessageStore(t)
-	defer ms.Flush()
 
 	d := &Daemon{
 		bridgeURL: bridgeSrv.URL,
