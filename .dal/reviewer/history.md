@@ -1,6 +1,6 @@
 ### 2026-04-02: PR #684, #685, #687, #688 일괄 리뷰 요청 (다중 PR 동시 처리 실패)
-**상태:** failed
-**결과:** exit status 1
+**상태:** pending
+**결과:** 다중 PR 동시 리뷰 시 exit status 발생. 인접한 verifier 체크는 정상 완료됨.
 
 **영향받은 PR:**
 - PR #684: tell 메시지 @dal-leader 멘션 테스트 추가
@@ -8,7 +8,7 @@
 - PR #687: feat/577-dalbridge-unify (common.env 로딩)
 - PR #688: feat/577-dalbridge-unify (systemd 서비스)
 
-**주의:** 다중 PR 동시 리뷰 시 exit status 발생. 인접한 verifier 체크는 정상 완료됨.
+**주의:** 다중 PR 동시 처리 시 개별 검토 요청으로 분할 필요.
 
 **다음:**
 **주의:**
