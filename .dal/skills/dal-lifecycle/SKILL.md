@@ -15,6 +15,7 @@ id: DAL:SKILL:life0001
 | veilkey-v2 | 11193 | dalcenter@veilkey-v2 |
 | dal-qa-team | 11194 | dalcenter@dal-qa-team |
 | emotion-ai | 11195 | 수동 (nsenter) |
+| writing-style | 11196 | dalcenter@writing-style |
 
 ## Wake / Sleep
 

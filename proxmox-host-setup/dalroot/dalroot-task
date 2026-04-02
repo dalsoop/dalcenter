@@ -32,6 +32,7 @@ get_team_port() {
         veilkey-selfhosted)     echo 11190 ;;
         bridge-of-gaya-script)  echo 11191 ;;
         dal-qa-team)            echo 11194 ;;
+        writing-style)          echo 11196 ;;
         *)
             echo "[dalroot-task] unknown team: $team" >&2
             return 1
