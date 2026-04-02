@@ -113,6 +113,8 @@ Use --no-ack to skip waiting for ACK (fire-and-forget mode).`,
 // sendViaDalcenter sends a message through the target dalcenter's /api/message endpoint.
 // Returns the message_id assigned by the target dalcenter for ACK tracking.
 func sendViaDalcenter(team, message, wakeNote string) (string, error) {
+	message = "@dal-leader " + message
+
 	targetURL, err := resolveRepoURL(team)
 	if err != nil {
 		return "", fmt.Errorf("resolve repo URL: %w", err)
@@ -221,6 +223,8 @@ func triggerIssueWorkflow(team string, issueNum int, member, task string) error 
 
 // sendViaBridge sends a message directly to a team's matterbridge API.
 func sendViaBridge(team, message, wakeNote string) error {
+	message = "@dal-leader " + message
+
 	bridgeURL, err := resolveBridgeURL(team)
 	if err != nil {
 		return fmt.Errorf("resolve bridge URL: %w", err)
