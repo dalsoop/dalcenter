@@ -201,6 +201,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 		go d.startScheduledDalroot(ctx, d.githubRepo)
 	}
 
+	// Start heartbeat to leader container
+	go d.startHeartbeat(ctx)
+
 	if d.bridgeURL != "" {
 		log.Printf("[daemon] matterbridge URL: %s", d.bridgeURL)
 	}
