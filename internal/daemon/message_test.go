@@ -35,8 +35,8 @@ func TestHandleMessage_PostsViaBridge(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	if !strings.Contains(receivedBody, "test message") {
-		t.Errorf("expected message in bridge post body, got: %s", receivedBody)
+	if !strings.Contains(receivedBody, "@dal-leader test message") {
+		t.Errorf("expected @dal-leader prefix in bridge post body, got: %s", receivedBody)
 	}
 	if !strings.Contains(receivedBody, "leader") {
 		t.Errorf("expected username in bridge post body, got: %s", receivedBody)

@@ -985,10 +985,14 @@ func (d *Daemon) handleMessage(w http.ResponseWriter, r *http.Request) {
 	if dalName == "" {
 		dalName = "dalcenter"
 	}
+
+	// Prepend @dal-leader mention so the leader picks up the message
+	msg := "@dal-leader " + req.Message
+
 	// Post directly to MM (not via matterbridge) to avoid self-skip
-	if err := d.mmPost(req.Message); err != nil {
+	if err := d.mmPost(msg); err != nil {
 		// Fallback to bridge
-		if err2 := d.bridgePost(req.Message, dalName); err2 != nil {
+		if err2 := d.bridgePost(msg, dalName); err2 != nil {
 			http.Error(w, fmt.Sprintf("post failed: mm=%v bridge=%v", err, err2), 500)
 			return
 		}
