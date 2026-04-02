@@ -1,3 +1,15 @@
+### 2026-04-02: 이슈 #577: 모든 팀의 bridge를 CT 202 dalbridge로 통일. feat/577-dalbridge-unify 브랜치 작업 완료.
+**상태:** done
+**결과:** PR #688 생성 완료. feat/577-dalbridge-unify → main PR이 dalsoop/dalcenter#688 으로 올라가 있습니다.
+
+**변경 내용:**
+- `common.env` 환경파일 로드 추가 (optional, `-` prefix)
+- `--dalbridge-url` 플래그로 모든 팀이 CT 202 dalbridge 사용 가능
+- systemd 서비스 파일 수정
+
+**다음:** reviewer와 verifier 체크 대기
+**주의:**
+
 ### 2026-04-02: 이슈 #686: ops dal → LXC 101 경유 아키텍처 — 스킬 기반 표준화...
 **상태:** done
 **결과:** 구현 완료. 요약:
