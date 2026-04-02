@@ -99,6 +99,39 @@ func TestHandleStatusOne(t *testing.T) {
 	}
 }
 
+func TestHandleStatusOne_WithInstanceID(t *testing.T) {
+	d, _ := setupTestDaemon(t)
+
+	// Simulate a running container with InstanceID
+	d.containers["dev"] = &Container{
+		DalName:     "dev",
+		UUID:        "dev-test-001",
+		InstanceID:  "inst-abc123",
+		ContainerID: "container-xyz",
+		Status:      "running",
+	}
+
+	req := httptest.NewRequest("GET", "/api/status/dev", nil)
+	req.SetPathValue("name", "dev")
+	w := httptest.NewRecorder()
+	d.handleStatusOne(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("status = %d", w.Code)
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := resp["instance_id"]; got != "inst-abc123" {
+		t.Errorf("expected instance_id=inst-abc123, got %v", got)
+	}
+	if got := resp["status"]; got != "running" {
+		t.Errorf("expected status=running, got %v", got)
+	}
+}
+
 func TestHandleStatusOneNotFound(t *testing.T) {
 	d, _ := setupTestDaemon(t)
 
@@ -196,6 +229,24 @@ func TestDuplicateWakeReturnsConflict(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "already running") {
 		t.Fatalf("expected 'already running' in body, got %q", w.Body.String())
+	}
+}
+
+func TestContainerJSON_InstanceID(t *testing.T) {
+	c := &Container{
+		DalName:    "dev",
+		UUID:       "dev-001",
+		InstanceID: "inst-xyz789",
+		Status:     "running",
+	}
+	data, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	json.Unmarshal(data, &m)
+	if got := m["instance_id"]; got != "inst-xyz789" {
+		t.Errorf("expected instance_id=inst-xyz789 in JSON, got %v", got)
 	}
 }
 
