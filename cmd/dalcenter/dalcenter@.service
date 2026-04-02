@@ -8,10 +8,11 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
+EnvironmentFile=-/etc/dalcenter/common.env
 EnvironmentFile=/etc/dalcenter/%i.env
 Environment=PATH=/usr/local/bin:/usr/local/go/bin:/root/go/bin:/usr/bin:/bin
 Environment=HOME=/root
-ExecStart=/usr/local/bin/dalcenter serve --addr :${DALCENTER_PORT} --repo ${DALCENTER_REPO} --bridge-url ${DALCENTER_BRIDGE_URL}
+ExecStart=/usr/local/bin/dalcenter serve --addr :${DALCENTER_PORT} --repo ${DALCENTER_REPO} --bridge-url ${DALCENTER_BRIDGE_URL} --dalbridge-url ${DALCENTER_DALBRIDGE_URL}
 Restart=on-failure
 RestartSec=5
 
