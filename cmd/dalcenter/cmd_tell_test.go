@@ -314,6 +314,8 @@ func TestTellCmd_IssueTriggersWorkflow(t *testing.T) {
 				"workflow_id": "iwf-test",
 				"status":      "pending",
 			})
+		case "/api/ps":
+			json.NewEncoder(w).Encode([]struct{}{})
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -341,6 +343,10 @@ func TestTellCmd_NoIssue_NoWorkflow(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/issue-workflow" {
 			workflowCalled = true
+		}
+		if r.URL.Path == "/api/ps" {
+			json.NewEncoder(w).Encode([]struct{}{})
+			return
 		}
 		json.NewEncoder(w).Encode(map[string]string{"status": "sent"})
 	}))
