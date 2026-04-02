@@ -288,6 +288,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 	mux.HandleFunc("GET /api/pipeline/health", d.handlePipelineHealth)
 	mux.HandleFunc("GET /api/pipeline/list", d.handlePipelineList)
 
+	// Channel CRUD endpoints
+	mux.HandleFunc("POST /api/channel/create", d.requireAuth(d.handleChannelCreate))
+	mux.HandleFunc("POST /api/channel/delete", d.requireAuth(d.handleChannelDelete))
+	mux.HandleFunc("GET /api/channel/list", d.handleChannelList)
+
 	mux.HandleFunc("GET /.well-known/agent-card.json", d.handleAgentCard)
 	mux.HandleFunc("POST /rpc", d.requireAuth(d.handleA2ARPC))
 

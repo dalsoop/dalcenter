@@ -395,6 +395,120 @@ func (p *DalrootPipeline) channelCount() int {
 	return len(p.channels)
 }
 
+// --- Channel CRUD (named channels, not pane-bound) ---
+
+// ChannelInfo describes a Mattermost channel.
+type ChannelInfo struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	Purpose     string `json:"purpose"`
+	Type        string `json:"type"`
+}
+
+// CreateNamedChannel creates an MM channel with the given name.
+func (p *DalrootPipeline) CreateNamedChannel(name, purpose string) (*ChannelInfo, error) {
+	if !p.configured() {
+		return nil, fmt.Errorf("MM not configured (DALCENTER_MM_URL/DALCENTER_MM_TOKEN)")
+	}
+
+	teamID, err := p.getTeamID()
+	if err != nil {
+		return nil, fmt.Errorf("resolve team: %w", err)
+	}
+
+	// Check if already exists
+	if _, err := p.getChannelIDByName(teamID, name); err == nil {
+		return nil, fmt.Errorf("channel %q already exists", name)
+	}
+
+	if purpose == "" {
+		purpose = fmt.Sprintf("channel %s managed by dalcenter", name)
+	}
+
+	body := fmt.Sprintf(`{"team_id":%q,"name":%q,"display_name":%q,"purpose":%q,"type":"O"}`,
+		teamID, name, name, purpose)
+	resp, err := p.mmRequest("POST", "/api/v4/channels", body)
+	if err != nil {
+		return nil, fmt.Errorf("create channel: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("create channel %d: %s", resp.StatusCode, string(b))
+	}
+
+	var ch ChannelInfo
+	json.NewDecoder(resp.Body).Decode(&ch)
+	log.Printf("[channel] created %s (id=%s)", name, ch.ID)
+	return &ch, nil
+}
+
+// DeleteNamedChannel deletes an MM channel by name.
+func (p *DalrootPipeline) DeleteNamedChannel(name string) error {
+	if !p.configured() {
+		return fmt.Errorf("MM not configured (DALCENTER_MM_URL/DALCENTER_MM_TOKEN)")
+	}
+
+	teamID, err := p.getTeamID()
+	if err != nil {
+		return fmt.Errorf("resolve team: %w", err)
+	}
+
+	channelID, err := p.getChannelIDByName(teamID, name)
+	if err != nil {
+		return fmt.Errorf("channel %q not found", name)
+	}
+
+	resp, err := p.mmRequest("DELETE", fmt.Sprintf("/api/v4/channels/%s", channelID), "")
+	if err != nil {
+		return fmt.Errorf("delete channel: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("delete channel %d: %s", resp.StatusCode, string(b))
+	}
+
+	log.Printf("[channel] deleted %s (id=%s)", name, channelID)
+	return nil
+}
+
+// ListTeamChannels lists all channels in the team.
+func (p *DalrootPipeline) ListTeamChannels() ([]ChannelInfo, error) {
+	if !p.configured() {
+		return nil, fmt.Errorf("MM not configured (DALCENTER_MM_URL/DALCENTER_MM_TOKEN)")
+	}
+
+	teamID, err := p.getTeamID()
+	if err != nil {
+		return nil, fmt.Errorf("resolve team: %w", err)
+	}
+
+	var allChannels []ChannelInfo
+	page := 0
+	perPage := 100
+	for {
+		resp, err := p.mmRequest("GET", fmt.Sprintf("/api/v4/teams/%s/channels?page=%d&per_page=%d", teamID, page, perPage), "")
+		if err != nil {
+			return nil, fmt.Errorf("list channels: %w", err)
+		}
+		var batch []ChannelInfo
+		json.NewDecoder(resp.Body).Decode(&batch)
+		resp.Body.Close()
+		if len(batch) == 0 {
+			break
+		}
+		allChannels = append(allChannels, batch...)
+		if len(batch) < perPage {
+			break
+		}
+		page++
+	}
+
+	return allChannels, nil
+}
+
 // --- persistence ---
 
 func (p *DalrootPipeline) persist() {

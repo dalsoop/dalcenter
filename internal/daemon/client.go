@@ -791,3 +791,67 @@ func (c *Client) PipelineList() ([]PipelineChannel, error) {
 	json.NewDecoder(resp.Body).Decode(&result)
 	return result.Channels, nil
 }
+
+// --- Channel CRUD client methods ---
+
+// ChannelCreate creates a named MM channel.
+func (c *Client) ChannelCreate(name, purpose string) (*ChannelInfo, error) {
+	body := fmt.Sprintf(`{"name":%q,"purpose":%q}`, name, purpose)
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/channel/create", strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiToken)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("daemon unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("channel create failed: %s", strings.TrimSpace(string(b)))
+	}
+	var result ChannelInfo
+	json.Unmarshal(b, &result)
+	return &result, nil
+}
+
+// ChannelDelete deletes a named MM channel.
+func (c *Client) ChannelDelete(name string) error {
+	body := fmt.Sprintf(`{"name":%q}`, name)
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/channel/delete", strings.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiToken)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("daemon unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("channel delete failed: %s", strings.TrimSpace(string(b)))
+	}
+	return nil
+}
+
+// ChannelList returns all MM channels in the team.
+func (c *Client) ChannelList() ([]ChannelInfo, error) {
+	resp, err := c.http.Get(c.baseURL + "/api/channel/list")
+	if err != nil {
+		return nil, fmt.Errorf("daemon unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Channels []ChannelInfo `json:"channels"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+	return result.Channels, nil
+}
