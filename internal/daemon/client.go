@@ -126,6 +126,29 @@ func (c *Client) Activity(name string) (map[string]string, error) {
 	return c.postJSON(fmt.Sprintf("/api/activity/%s", name))
 }
 
+// ACK sends an acknowledgment that a message was received and is being processed.
+func (c *Client) ACK(messageID string) (map[string]string, error) {
+	return c.postJSON(fmt.Sprintf("/api/ack/%s", messageID))
+}
+
+// MessageStatus returns the delivery status of a buffered message.
+func (c *Client) MessageStatus(id string) (*BufferedMessage, error) {
+	resp, err := c.http.Get(c.baseURL + "/api/messages/" + id)
+	if err != nil {
+		return nil, fmt.Errorf("daemon unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("message not found: %s", strings.TrimSpace(string(body)))
+	}
+	var msg BufferedMessage
+	if err := json.NewDecoder(resp.Body).Decode(&msg); err != nil {
+		return nil, fmt.Errorf("json decode: %w", err)
+	}
+	return &msg, nil
+}
+
 // Ps returns running containers.
 func (c *Client) Ps() ([]*Container, error) {
 	resp, err := c.http.Get(c.baseURL + "/api/ps")
@@ -617,4 +640,154 @@ func (c *Client) ListIssueWorkflows() ([]IssueWorkflowStatus, error) {
 	var results []IssueWorkflowStatus
 	json.NewDecoder(resp.Body).Decode(&results)
 	return results, nil
+}
+
+// --- Pipeline client methods ---
+
+// PipelineInit initializes a pipeline channel for a pane.
+func (c *Client) PipelineInit(paneID string) (*PipelineChannel, error) {
+	body := fmt.Sprintf(`{"pane_id":%q}`, paneID)
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/pipeline/init", strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiToken)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("daemon unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("pipeline init failed: %s", strings.TrimSpace(string(b)))
+	}
+	var result PipelineChannel
+	json.Unmarshal(b, &result)
+	return &result, nil
+}
+
+// PipelineSend sends a message to a pane's pipeline channel.
+func (c *Client) PipelineSend(paneID, message string) error {
+	body := fmt.Sprintf(`{"pane_id":%q,"message":%q}`, paneID, message)
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/pipeline/send", strings.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiToken)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("daemon unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("pipeline send failed: %s", strings.TrimSpace(string(b)))
+	}
+	return nil
+}
+
+// PipelineReceive fetches messages from a pane's pipeline channel.
+func (c *Client) PipelineReceive(paneID string) ([]PipelineMessage, error) {
+	body := fmt.Sprintf(`{"pane_id":%q}`, paneID)
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/pipeline/receive", strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("daemon unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("pipeline receive failed: %s", strings.TrimSpace(string(b)))
+	}
+	var result struct {
+		Messages []PipelineMessage `json:"messages"`
+	}
+	json.Unmarshal(b, &result)
+	return result.Messages, nil
+}
+
+// PipelineBroadcast sends a message to all pipeline channels.
+func (c *Client) PipelineBroadcast(message string) error {
+	body := fmt.Sprintf(`{"message":%q}`, message)
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/pipeline/broadcast", strings.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiToken)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("daemon unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("pipeline broadcast failed: %s", strings.TrimSpace(string(b)))
+	}
+	return nil
+}
+
+// PipelineSync performs the full sync: send user message + fetch unread.
+func (c *Client) PipelineSync(paneID, message string) ([]PipelineMessage, error) {
+	body := fmt.Sprintf(`{"pane_id":%q,"message":%q}`, paneID, message)
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/pipeline/sync", strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiToken)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("daemon unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("pipeline sync failed: %s", strings.TrimSpace(string(b)))
+	}
+	var result struct {
+		Messages []PipelineMessage `json:"messages"`
+	}
+	json.Unmarshal(b, &result)
+	return result.Messages, nil
+}
+
+// PipelineHealth returns pipeline health status.
+func (c *Client) PipelineHealth() (*PipelineHealth, error) {
+	resp, err := c.http.Get(c.baseURL + "/api/pipeline/health")
+	if err != nil {
+		return nil, fmt.Errorf("daemon unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	var result PipelineHealth
+	json.NewDecoder(resp.Body).Decode(&result)
+	return &result, nil
+}
+
+// PipelineList returns all pipeline channel mappings.
+func (c *Client) PipelineList() ([]PipelineChannel, error) {
+	resp, err := c.http.Get(c.baseURL + "/api/pipeline/list")
+	if err != nil {
+		return nil, fmt.Errorf("daemon unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Channels []PipelineChannel `json:"channels"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+	return result.Channels, nil
 }

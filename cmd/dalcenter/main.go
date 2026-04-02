@@ -35,6 +35,7 @@ func main() {
 		newUpdateCmd(),
 		newVersionCmd(),
 		newTuiCmd(),
+		newPipelineCmd(),
 	)
 
 	if err := root.Execute(); err != nil {
