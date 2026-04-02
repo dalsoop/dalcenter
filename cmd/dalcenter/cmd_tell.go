@@ -93,6 +93,7 @@ func sendViaDalcenter(team, message, wakeNote string) error {
 	}
 
 	from := currentRepoName()
+	message = "@dal-leader " + message
 
 	body := fmt.Sprintf(`{"from":%q,"message":%q}`, from, message)
 	req, err := http.NewRequest(http.MethodPost, targetURL+"/api/message", strings.NewReader(body))
@@ -198,6 +199,7 @@ func sendViaBridge(team, message, wakeNote string) error {
 
 	gateway := resolveBridgeGateway(team)
 	from := currentRepoName()
+	message = "@dal-leader " + message
 
 	payload := struct {
 		Text     string `json:"text"`

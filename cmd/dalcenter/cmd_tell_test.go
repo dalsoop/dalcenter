@@ -32,8 +32,8 @@ func TestSendViaDalcenter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sendViaDalcenter: %v", err)
 	}
-	if received.Message != "hello leader" {
-		t.Errorf("message = %q, want %q", received.Message, "hello leader")
+	if received.Message != "@dal-leader hello leader" {
+		t.Errorf("message = %q, want %q", received.Message, "@dal-leader hello leader")
 	}
 }
 
@@ -78,8 +78,8 @@ func TestSendViaBridge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sendViaBridge: %v", err)
 	}
-	if received.Text != "direct message" {
-		t.Errorf("text = %q, want %q", received.Text, "direct message")
+	if received.Text != "@dal-leader direct message" {
+		t.Errorf("text = %q, want %q", received.Text, "@dal-leader direct message")
 	}
 	if received.Gateway != "dal-team" {
 		t.Errorf("gateway = %q, want %q", received.Gateway, "dal-team")
