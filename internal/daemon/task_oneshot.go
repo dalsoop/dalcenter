@@ -162,14 +162,23 @@ func (d *Daemon) buildOneShotArgs(containerName string, dal *localdal.DalProfile
 		args = append(args, "-e", "TASK_REPO="+tr.Repo)
 	}
 
-	// ── COMMAND ──
-	// claude -p with allowed tools, reading task from stdin
-	claudeCmd := `cd /workspace && TOOLS="Bash(git:*,gh:*) Read Write Glob Grep Edit" && claude -p --allowedTools "$TOOLS"`
-	args = append(args,
-		"-i",  // stdin for task pipe
-		image,
-		"bash", "-c", claudeCmd,
-	)
+	// ── COMMAND (player-specific) ──
+	switch dal.Player {
+	case "codex":
+		args = append(args, image,
+			"codex", "exec",
+			"--dangerously-bypass-approvals-and-sandbox",
+			"-C", "/workspace",
+			tr.Task,
+		)
+	default: // claude
+		claudeCmd := `cd /workspace && TOOLS="Bash(git:*,gh:*) Read Write Glob Grep Edit" && claude -p --allowedTools "$TOOLS"`
+		args = append(args,
+			"-i",
+			image,
+			"bash", "-c", claudeCmd,
+		)
+	}
 
 	return args
 }
