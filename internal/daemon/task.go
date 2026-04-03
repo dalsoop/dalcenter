@@ -616,7 +616,8 @@ func (d *Daemon) execTaskOneShot(dalName, role, task string, tr *taskResult) {
 	instanceID := newPrefixedUUID("oneshot")
 
 	// Create temporary container
-	containerID, _, err := dockerRun(d.localdalRoot, d.serviceRepo, dalName, d.addr, d.bridgeURL, d.dalbridgeURL, dal, instanceID)
+	oneshotName := fmt.Sprintf("oneshot-%s-%s", dalName, instanceID[:8])
+	containerID, _, err := dockerRun(d.localdalRoot, d.serviceRepo, oneshotName, d.addr, d.bridgeURL, d.dalbridgeURL, dal, instanceID)
 	if err != nil {
 		now := time.Now().UTC()
 		tr.DoneAt = &now
