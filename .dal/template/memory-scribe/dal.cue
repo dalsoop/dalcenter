@@ -24,7 +24,7 @@ auto_task: """
 	- git add -A && git commit -m 'chore: prune stale memory entries' && git push
 	- push 3회 실패 시 dalcli claim --type blocked "memory push failed"
 	"""
-auto_interval: "30m"
+auto_interval: "2h"
 workspace:     "/root/dalroot-memory"
 git: {
 	user:         "dal-memory-scribe"

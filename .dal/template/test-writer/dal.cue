@@ -7,7 +7,7 @@ role:        "member"
 skills:      ["skills/git-workflow"]
 hooks:       []
 auto_task:      "1. gh pr list --state open 스캔. 2. PR diff에서 테스트 없는 .go 파일 감지 (_test.go 미존재). 3. 해당 파일에 대한 _test.go 작성. 4. PR 브랜치에 커밋 또는 리뷰 코멘트로 제안."
-auto_interval:  "30m"
+auto_interval:  "2h"
 git: {
 	user:         "dal-test-writer"
 	email:        "dal-test-writer@dalcenter.local"
