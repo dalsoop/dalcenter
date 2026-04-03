@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"time"
 	"log"
 	"os/exec"
 	"strings"
@@ -67,4 +68,59 @@ func (d *Daemon) enforceChannelRules(teamName string) error {
 // logRuleViolation logs a rule violation for auditing.
 func logRuleViolation(rule, detail string) {
 	log.Printf("[rules] VIOLATION: %s — %s", rule, detail)
+}
+
+// ── 추가 강제 규칙 ──
+
+// enforceAutoIssueLimit prevents excessive auto-created issues.
+// Max 3 auto-created issues per 24h.
+var autoIssueCount int
+var autoIssueResetTime time.Time
+
+func enforceAutoIssueLimit() error {
+	now := time.Now()
+	if now.Sub(autoIssueResetTime) > 24*time.Hour {
+		autoIssueCount = 0
+		autoIssueResetTime = now
+	}
+	if autoIssueCount >= 3 {
+		return fmt.Errorf("auto issue limit reached (3/24h) — manual creation required")
+	}
+	autoIssueCount++
+	log.Printf("[rules] auto issue %d/3 today", autoIssueCount)
+	return nil
+}
+
+// enforceNoMainPush blocks direct push to main branch.
+// Called from autoGitWorkflow before git push.
+func enforceNoMainPush(branch string) error {
+	if branch == "main" || branch == "master" {
+		return fmt.Errorf("direct push to %s forbidden — use branch + PR", branch)
+	}
+	return nil
+}
+
+// enforceOpsWatcherRateLimit limits consecutive wake failures.
+// After 3 consecutive failures for same team, stop retrying.
+var opsWakeFailures = make(map[string]int)
+
+func enforceOpsWakeLimit(teamName string, success bool) error {
+	if success {
+		opsWakeFailures[teamName] = 0
+		return nil
+	}
+	opsWakeFailures[teamName]++
+	if opsWakeFailures[teamName] >= 3 {
+		return fmt.Errorf("team %q wake failed 3 consecutive times — alerting only, no more retries", teamName)
+	}
+	return nil
+}
+
+// enforceMinAutoInterval rejects auto_task intervals below minimum.
+func enforceMinAutoInterval(interval time.Duration) error {
+	minInterval := 1 * time.Hour
+	if interval > 0 && interval < minInterval {
+		return fmt.Errorf("auto_task interval %v is below minimum %v", interval, minInterval)
+	}
+	return nil
 }

@@ -970,6 +970,11 @@ func autoGitWorkflow(dalName string) string {
 	}
 
 	// Push
+	// Rule: no main push
+	if err := enforceNoMainPush(branch); err != nil {
+		run("git", "checkout", "main")
+		return fmt.Sprintf("⚠️ %v", err)
+	}
 	if _, err := run("git", "push", "-u", "origin", branch); err != nil {
 		run("git", "checkout", "main")
 		return fmt.Sprintf("⚠️ 푸시 실패: %v", err)
@@ -1543,6 +1548,11 @@ func containsFailure(output string) bool {
 
 // createGitHubIssue creates a GitHub issue for auto-detected problems.
 func createGitHubIssue(dalName, output string) string {
+	// Rule: auto issue rate limit
+	if err := enforceAutoIssueLimit(); err != nil {
+		log.Printf("[rules] auto issue blocked: %v", err)
+		return ""
+	}
 	title := fmt.Sprintf("[auto] %s: 자동 검증 실패 감지", dalName)
 	body := fmt.Sprintf("## 자동 검증 결과\n\n`%s` dal이 주기적 검증에서 문제를 발견했습니다.\n\n```\n%s\n```\n\n---\n🤖 자동 생성 by dal-%s", dalName, truncate(output, 3000), dalName)
 

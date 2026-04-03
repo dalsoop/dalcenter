@@ -91,10 +91,15 @@ func (d *Daemon) opsCheckTeam(client *http.Client, team teamEndpoint) error {
 
 	if err := wakeLeaderRemote(client, team.URL); err != nil {
 		d.postAlert(fmt.Sprintf(":warning: **ops-watcher**: team `%s` has 0 dals and leader wake failed: %v", team.Name, err))
+	if err := enforceOpsWakeLimit(team.Name, false); err != nil {
+		log.Printf("[rules] %v", err)
+		return nil // stop retrying
+	}
 		return fmt.Errorf("wake leader: %w", err)
 	}
 
 	log.Printf("[ops-watcher] %s: leader wake request sent", team.Name)
+	enforceOpsWakeLimit(team.Name, true)
 	d.postAlert(fmt.Sprintf(":rocket: **ops-watcher**: team `%s` had 0 dals — leader auto-waked", team.Name))
 	return nil
 }
