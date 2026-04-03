@@ -131,6 +131,16 @@ func (d *Daemon) buildOneShotArgs(containerName string, dal *localdal.DalProfile
 	settingsPath := "/etc/dalcenter/settings.json"
 	if _, err := os.Stat(settingsPath); err == nil {
 		args = append(args, "-v", settingsPath+":/root/.claude/settings.json:ro")
+	// gh CLI auth (ro)
+	ghConfigDir := filepath.Join(hostHome, ".config", "gh")
+	if _, err := os.Stat(ghConfigDir); err == nil {
+		args = append(args, "-v", ghConfigDir+":/root/.config/gh:ro")
+	}
+	// git config
+	gitConfigFile := filepath.Join(hostHome, ".gitconfig")
+	if _, err := os.Stat(gitConfigFile); err == nil {
+		args = append(args, "-v", gitConfigFile+":/root/.gitconfig:ro")
+	}
 	}
 
 	// ── ENVIRONMENT ──

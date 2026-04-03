@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 	"os/exec"
-	"strings"
 	"sync"
 	"time"
 )
@@ -199,55 +198,16 @@ func (d *Daemon) handleIssueWorkflowList(w http.ResponseWriter, r *http.Request)
 func (d *Daemon) runIssueWorkflow(wf *IssueWorkflow, callbackPane string) {
 	log.Printf("[issue-workflow] starting %s: issue=#%s member=%s", wf.ID, wf.IssueID, wf.Member)
 
-	// Phase 1: Wake member with issue branch
-	wf.Status = "waking"
-	wf.addEvent("wake", fmt.Sprintf("Waking member %s with issue #%s", wf.Member, wf.IssueID))
-
-	wakeResult, err := d.wakeForIssue(wf.Member, wf.IssueID)
-	if err != nil {
-		wf.fail(fmt.Sprintf("wake failed: %v", err))
-		log.Printf("[issue-workflow] %s wake failed: %v", wf.ID, err)
-		d.notifyWorkflowResult(wf, callbackPane)
-		return
-	}
-	containerID := wakeResult
-	log.Printf("[issue-workflow] %s: member %s awake (container=%s)", wf.ID, wf.Member, truncateStr(containerID, 12))
-
-	// Phase 2: Assign task to member via direct task execution
-	wf.Status = "assigned"
-	wf.addEvent("assign", fmt.Sprintf("Assigning task to %s: %s", wf.Member, truncateStr(wf.Task, 80)))
-
-	d.mu.RLock()
-	c, ok := d.containers[wf.Member]
-	d.mu.RUnlock()
-	if !ok {
-		// Check for instance variants (dev-2, dev-3, etc.)
-		d.mu.RLock()
-		for name, container := range d.containers {
-			if strings.HasPrefix(name, wf.Member) {
-				c = container
-				ok = true
-				break
-			}
-		}
-		d.mu.RUnlock()
-	}
-	if !ok {
-		wf.fail(fmt.Sprintf("member %s not found after wake", wf.Member))
-		log.Printf("[issue-workflow] %s member not found after wake", wf.ID)
-		d.notifyWorkflowResult(wf, callbackPane)
-		return
-	}
-
-	// Phase 3: Execute task in container
+	// Phase 1-3: Oneshot execution (no wake, no persistent container)
 	wf.Status = "working"
-	wf.addEvent("working", "Task execution started")
+	wf.addEvent("oneshot", fmt.Sprintf("Oneshot execution: member=%s task=%s", wf.Member, truncateStr(wf.Task, 80)))
+	log.Printf("[issue-workflow] %s: oneshot execution for %s", wf.ID, wf.Member)
 
-	tr := d.tasks.New(c.DalName, wf.Task)
+	tr := d.tasks.New(wf.Member, wf.Task)
 	tr.CallbackPane = callbackPane
 	wf.TaskID = tr.ID
 
-	d.execTaskInContainer(c, tr)
+	d.execTaskOneShot(wf.Member, "member", wf.Task, tr)
 
 	// Phase 4: Check result
 	if tr.Status == "failed" {
