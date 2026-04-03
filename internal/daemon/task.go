@@ -418,6 +418,16 @@ func (d *Daemon) handleTaskList(w http.ResponseWriter, r *http.Request) {
 func (d *Daemon) execTaskInContainer(c *Container, tr *taskResult) {
 	log.Printf("[task] executing %s on %s: %s", tr.ID, c.DalName, truncateStr(tr.Task, 80))
 
+	// ── HARNESS PRE-GATE ──
+	if err := d.preTaskGate(c, tr); err != nil {
+		now := time.Now().UTC()
+		tr.DoneAt = &now
+		tr.Status = "failed"
+		tr.Error = err.Error()
+		log.Printf("[harness] task %s blocked: %v", tr.ID, err)
+		return
+	}
+
 	// Cross-repo: clone target repo into container before execution
 	workDir := containerWorkDir
 	if tr.Repo != "" {
@@ -509,6 +519,9 @@ func (d *Daemon) execTaskInContainer(c *Container, tr *taskResult) {
 		})
 
 		// Notify dalroot on failure
+	// ── HARNESS POST-GATE ──
+	d.postTaskGate(c, tr)
+	if tr.Status != "failed" { resetConsecutiveFailure(c.DalName) }
 		notifyTaskComplete(c.DalName, c.InstanceID, tr, d.serviceRepo)
 	} else {
 		tr.Status = "done"
@@ -542,6 +555,9 @@ func (d *Daemon) execTaskInContainer(c *Container, tr *taskResult) {
 		})
 
 		// Notify dalroot on completion
+	// ── HARNESS POST-GATE ──
+	d.postTaskGate(c, tr)
+	if tr.Status != "failed" { resetConsecutiveFailure(c.DalName) }
 		notifyTaskComplete(c.DalName, c.InstanceID, tr, d.serviceRepo)
 	}
 }
