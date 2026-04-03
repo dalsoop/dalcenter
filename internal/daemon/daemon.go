@@ -52,6 +52,7 @@ type Daemon struct {
 	messages         *messageStore
 	registry         *Registry
 	pipeline         *DalrootPipeline
+	taskLimiter      *TaskLimiter
 	ha               *haState
 	startTime        time.Time
 }
@@ -101,6 +102,7 @@ func New(addr, localdalRoot, serviceRepo, bridgeURL, dalbridgeURL, bridgeConf, g
 		messages:       newMessageStore(filepath.Join(stateDir(serviceRepo), "messages.json")),
 		registry:       newRegistry(serviceRepo),
 		pipeline:       newDalrootPipeline(serviceRepo),
+		taskLimiter:     newTaskLimiter(),
 		ha:            initHA(),
 		credSyncLast: newCredentialSyncMap(),
 		startTime:    time.Now(),

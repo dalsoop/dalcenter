@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dalsoop/dalcenter/internal/localdal"
 )
 
 // taskResult holds the result of a direct task execution.
@@ -599,51 +598,3 @@ func truncateStr(s string, n int) string {
 
 // execTaskOneShot creates a temporary container, runs the task, and removes the container.
 // This is the non-persistent execution mode — no wake/sleep lifecycle needed.
-func (d *Daemon) execTaskOneShot(dalName, role, task string, tr *taskResult) {
-	log.Printf("[oneshot] starting %s (role=%s) task=%s", tr.ID, role, truncateStr(task, 80))
-
-	// Find dal profile for mount/env setup
-	dal, err := localdal.ReadDalCue(d.dalCuePath(dalName), dalName)
-	if err != nil {
-		// Fallback: use default dev profile
-		dal = &localdal.DalProfile{
-			Name:   dalName,
-			Player: "claude",
-			Role:   role,
-		}
-	}
-
-	instanceID := newPrefixedUUID("oneshot")
-
-	// Create temporary container
-	oneshotName := fmt.Sprintf("oneshot-%s-%s", dalName, instanceID[:8])
-	containerID, _, err := dockerRun(d.localdalRoot, d.serviceRepo, oneshotName, d.addr, d.bridgeURL, d.dalbridgeURL, dal, instanceID)
-	if err != nil {
-		now := time.Now().UTC()
-		tr.DoneAt = &now
-		tr.Status = "failed"
-		tr.Error = fmt.Sprintf("oneshot container create: %v", err)
-		log.Printf("[oneshot] %s container create failed: %v", tr.ID, err)
-		return
-	}
-
-	log.Printf("[oneshot] %s container=%s created", tr.ID, containerID[:12])
-
-	// Build a temporary Container struct for execTaskInContainer
-	c := &Container{
-		DalName:     dalName,
-		Player:      dal.Player,
-		Role:        role,
-		ContainerID: containerID,
-		Status:      "running",
-	}
-
-	// Execute task (reuse existing logic)
-	d.execTaskInContainer(c, tr)
-
-	// Cleanup: remove container
-	if err := dockerStop(containerID); err != nil {
-		log.Printf("[oneshot] %s stop failed: %v", tr.ID, err)
-	}
-	log.Printf("[oneshot] %s completed (status=%s)", tr.ID, tr.Status)
-}
