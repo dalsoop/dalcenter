@@ -99,3 +99,18 @@ dalcenter API 중 10개가 인증 없이 접근 가능 (requireAuth 미적용):
 - GET /api/health, /api/ps, /api/status, /api/logs, /api/tasks, /api/agent-config 등
 - 내부망(10.50.x.x)이라 당장 위험은 낮지만, 외부 노출 시 정보 유출
 - 최소한 읽기 전용 API도 토큰 체크 추가 검토
+
+### 컨테이너 보안 미비
+
+dal 컨테이너 보안 이슈:
+1. 전부 root로 실행 — USER 지정 없음
+2. credential(.credentials.json)이 bind mount로 컨테이너에 노출
+3. 네트워크 격리 없음 — 컨테이너가 호스트 네트워크 접근 가능
+4. CPU/메모리 제한 없음 — 한 컨테이너가 호스트 리소스 독점 가능
+내부망이라 당장 위험은 낮지만, 장기적으로 개선 필요.
+
+### 로그/디스크 관리 없음
+
+- dalcenter 로그파일(/var/log/dalcenter-*.log) 로테이션 없음 — 무한 증가
+- 디스크 공간 감시 없음 — docker image/container 누적으로 디스크 풀 가능
+- scaler dal이 모니터링하지만 24시간 간격이라 느림
