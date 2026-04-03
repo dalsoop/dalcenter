@@ -635,7 +635,7 @@ func runAgentLoop(dalName string) error {
 			continue
 		}
 
-		if !isDirectMention && !isThreadReply && !isDM {
+		if false && !isDirectMention && !isThreadReply && !isDM { // DISABLED: 채널 메시지 전부 수신
 			continue
 		}
 
