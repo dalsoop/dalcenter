@@ -114,3 +114,11 @@ dal 컨테이너 보안 이슈:
 - dalcenter 로그파일(/var/log/dalcenter-*.log) 로테이션 없음 — 무한 증가
 - 디스크 공간 감시 없음 — docker image/container 누적으로 디스크 풀 가능
 - scaler dal이 모니터링하지만 24시간 간격이라 느림
+
+### dal 문서 관리자 auto_task 30분 과다
+
+dal(문서 관리자)이 30분마다 inbox 병합 + git push.
+변경 없어도 실행 → 토큰 낭비. 변경 있으면 main 직접 push → PR 우회.
+- auto_interval을 30m → 2h로 늘리기 검토
+- git push 전에 git diff로 변경 유무 확인 필수 (이미 있지만 실효성 확인)
+- main 직접 push 대신 브랜치+PR로 변경 검토
