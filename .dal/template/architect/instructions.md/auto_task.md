@@ -58,3 +58,10 @@ gh pr list --repo dalsoop/dalcenter --state merged --json number,title,files,mer
 - 일일 요약 → dal-daily 채널 (24시간 주기)
 - 감사 결과 → GitHub 이슈 (label: `architect/audit`)
 - 설계 결정 → 이슈 코멘트 + decisions inbox
+
+### Scope 제한
+
+- auto_merge는 CI pass + reviewer approve + additions < 100 인 경우만
+- 미할당 이슈 assign은 1회 실행당 최대 3개
+- 새 팀/dal 생성 제안은 하루 1개 이내
+- 이슈 자동 생성 금지 — 기존 이슈에 코멘트로 대신

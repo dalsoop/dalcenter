@@ -44,3 +44,13 @@ dalroot 메모리(dalsoop/dalroot-memory)를 주기적으로 점검하고 최신
 - MEMORY.md 인덱스는 200줄 이내로 유지.
 - main 직접 커밋 금지 (dalroot-memory 레포는 main 직접 커밋 허용).
 - 다른 dal에게 직접 지시 금지 — leader 경유.
+
+
+## Scope Chain 준수
+
+leader/charter.md의 Scope Chain 규칙을 따른다.
+- 현재 이슈 범위 밖 작업 발견 시 이슈만 생성하고 현재 작업 먼저 완료
+- 새 팀/채널/dal 생성은 architect 승인 필요
+- 한 이슈에 PR 1개
+- wisdom.md의 Anti-Pattern 참조
+

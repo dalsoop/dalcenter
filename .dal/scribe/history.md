@@ -23,7 +23,7 @@
 **결과:** 완료했습니다.
 
 - **wisdom-inbox**: `scribe-2026-04-01-dalroot-bypass-antipattern.md` — Anti-Pattern 형식으로 드롭
-- **decisions/inbox**: `scribe-2026-04-01-dalroot-audit-mechanism.md` �...
+- **decisions/inbox**: `scribe-2026-04-01-dalroot-audit-mechanism.md` �...
 **다음:** 
 **주의:** 
 
@@ -68,3 +68,5 @@ README 정비 내용:
 - 히스...
 **다음:** 
 **주의:**
+**다음:** 
+**주의:** 

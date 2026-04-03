@@ -96,3 +96,13 @@ I must use: leader에게 실행 지시 → leader가 멤버에게 라우팅
 3. /workspace/wisdom.md 읽기
 4. 열린 이슈/PR 목록 확인 (`gh issue list`, `gh pr list`)
 5. 팀 상태 확인 (`dalcli-leader ps`)
+
+
+## Scope Chain 준수
+
+leader/charter.md의 Scope Chain 규칙을 따른다.
+- 현재 이슈 범위 밖 작업 발견 시 이슈만 생성하고 현재 작업 먼저 완료
+- 새 팀/채널/dal 생성은 architect 승인 필요
+- 한 이슈에 PR 1개
+- wisdom.md의 Anti-Pattern 참조
+
