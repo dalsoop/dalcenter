@@ -92,3 +92,10 @@ config-manager가 동기화해야 하지만 아직 미실행.
 
 dalcenter에 180개 remote branch 누적. 머지 후 자동 삭제 설정 필요.
 GitHub repo settings > Automatically delete head branches 활성화.
+
+### 인증 없는 API 엔드포인트
+
+dalcenter API 중 10개가 인증 없이 접근 가능 (requireAuth 미적용):
+- GET /api/health, /api/ps, /api/status, /api/logs, /api/tasks, /api/agent-config 등
+- 내부망(10.50.x.x)이라 당장 위험은 낮지만, 외부 노출 시 정보 유출
+- 최소한 읽기 전용 API도 토큰 체크 추가 검토
