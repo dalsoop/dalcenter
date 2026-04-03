@@ -248,6 +248,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// Start scheduled dalroot (pipeline surveillance)
 	if scheduledDalrootEnabled() {
 		go d.startScheduledDalroot(ctx, d.githubRepo)
+	go d.startAutoTaskScheduler(ctx)
 	}
 
 	if d.bridgeURL != "" {
