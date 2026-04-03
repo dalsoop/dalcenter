@@ -19,6 +19,7 @@ func newTaskLimiter() *TaskLimiter {
 			"leader": 1,
 			"member": 3,
 			"ops":    2,
+		"oneshot": 3,
 		},
 	}
 }

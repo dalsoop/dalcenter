@@ -30,7 +30,7 @@ func (d *Daemon) execTaskOneShot(dalName, role, task string, tr *taskResult) {
 	}
 
 	// ── CONCURRENCY LIMIT (AgentField pattern) ──
-	if err := d.taskLimiter.Acquire(role); err != nil {
+	if err := d.taskLimiter.Acquire("oneshot"); err != nil {
 		now := time.Now().UTC()
 		tr.DoneAt = &now
 		tr.Status = "failed"
@@ -38,7 +38,7 @@ func (d *Daemon) execTaskOneShot(dalName, role, task string, tr *taskResult) {
 		log.Printf("[oneshot] %s blocked by limiter: %v", tr.ID, err)
 		return
 	}
-	defer d.taskLimiter.Release(role)
+	defer d.taskLimiter.Release("oneshot")
 
 	// ── DAL PROFILE ──
 	dal, err := localdal.ReadDalCue(d.dalCuePath(dalName), dalName)
