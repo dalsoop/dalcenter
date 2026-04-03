@@ -329,6 +329,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	mux.HandleFunc("GET /.well-known/agent-card.json", d.handleAgentCard)
 	mux.HandleFunc("POST /rpc", d.requireAuth(d.handleA2ARPC))
 
+	// Auto-set DALCENTER_URL in env file + bashrc so CLI commands work without manual export.
+	ensureDalcenterURL(d.addr, d.serviceRepo)
+
 	srv := &http.Server{Addr: d.addr, Handler: mux}
 	log.Printf("[daemon] listening on %s", d.addr)
 
